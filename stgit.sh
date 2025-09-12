@@ -259,6 +259,14 @@ cmd_submit() {
         if [[ -z "$parent" ]]; then
           parent="$BASE_BRANCH"
         fi
+
+        # Check for new commits before trying to create a PR
+        local commit_count
+        commit_count=$(git rev-list --count "${parent}".."${branch_name}")
+        if [[ "$commit_count" -eq 0 ]]; then
+            echo "Skipping PR for '$branch_name': No new commits compared to '$parent'."
+            continue
+        fi
         
         echo "Creating PR for '$branch_name' to be merged into '$parent'..."
         # First, ensure the branch exists on the remote
