@@ -123,15 +123,18 @@ get_stack_top() {
 gh_api_call() {
     local method=$1
     local endpoint=$2
-    local data=$3
+    shift 2 # The rest of the arguments are data fields
+    local fields=()
+    for field in "$@"; do
+        fields+=(-f "$field")
+    done
     
-    # Removed '2>/dev/null' to ensure API errors from 'gh' are visible.
     # The 'set -e' at the top of the script will cause it to exit on failure.
     gh api "repos/${GH_USER}/${GH_REPO}/${endpoint}" \
         --method "$method" \
         -H "Accept: application/vnd.github.v3+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        ${data:+-f "$data"}
+        "${fields[@]}"
 }
 
 
@@ -256,7 +259,7 @@ cmd_submit() {
         pr_title=$(git log -1 --pretty=%s "$branch_name")
         
         local pr_response
-        pr_response=$(gh_api_call "POST" "pulls" "title=$pr_title&head=$branch_name&base=$parent")
+        pr_response=$(gh_api_call "POST" "pulls" "title=$pr_title" "head=$branch_name" "base=$parent")
         
         local new_pr_number
         new_pr_number=$(echo "$pr_response" | jq -r '.number')
