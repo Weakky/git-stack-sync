@@ -159,18 +159,22 @@ cmd_insert() {
 # Here, we'll just show what PRs would be created.
 cmd_submit() {
     echo "Submitting stack for review..."
-    local current_branch
-    current_branch=$(get_current_branch)
-    local parent
-    parent=$(get_parent_branch "$current_branch")
+    local bottom_branch
+    bottom_branch=$(get_stack_bottom)
     local pr_stack=()
 
-    while [[ -n "$parent" ]]; do
+    local current_branch
+    current_branch=$(get_stack_top)
+
+    while [[ -n "$current_branch" && "$current_branch" != "$BASE_BRANCH" ]]; do
+        local parent
+        parent=$(get_parent_branch "$current_branch")
+        if [[ -z "$parent" ]]; then
+          parent="$BASE_BRANCH"
+        fi
         pr_stack=("${pr_stack[@]}" "PR for '$current_branch' to be merged into '$parent'")
         current_branch=$parent
-        parent=$(get_parent_branch "$current_branch")
     done
-     pr_stack=("${pr_stack[@]}" "PR for '$current_branch' to be merged into '$BASE_BRANCH'")
 
     # Print in reverse order
     for (( i=${#pr_stack[@]}-1 ; i>=0 ; i-- )) ; do
@@ -245,19 +249,51 @@ cmd_rebase() {
 
     # Use the --update-refs magic! This rebases the top branch and all its
     # ancestors until the common base, updating all intermediate branch refs.
+    # Git handles the "stack walking" internally.
     git rebase "origin/$BASE_BRANCH" --update-refs
 
     echo "Stack rebased successfully!"
-    # echo "The following branches were updated:"
-    # A simple way to show the stack is to list branches with the same prefix.
-    # A more robust method would traverse the parent chain again.
-    # TODO: Implement a more robust listing of the stack branches.
-    # git branch --list "$(dirname "$top_branch")/*"
     
     echo "Returning to original branch '$original_branch'."
     git checkout "$original_branch"
     
-    echo "You may need to force-push the updated branches."
+    echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
+}
+
+# Command: stgit push
+cmd_push() {
+    echo "Collecting all branches in the stack..."
+    local top_branch
+    top_branch=$(get_stack_top)
+    
+    local branches_to_push=()
+    local current_branch="$top_branch"
+
+    while [[ -n "$current_branch" && "$current_branch" != "$BASE_BRANCH" ]]; do
+        branches_to_push+=("$current_branch")
+        current_branch=$(get_parent_branch "$current_branch")
+    done
+    
+    if [ ${#branches_to_push[@]} -eq 0 ]; then
+        echo "No stack branches found to push."
+        exit 1
+    fi
+
+    echo "Will force-push the following branches:"
+    for branch in "${branches_to_push[@]}"; do
+        echo "  - $branch"
+    done
+    
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Push cancelled."
+        exit 1
+    fi
+
+    # Using --force-with-lease is safer than --force
+    echo "Pushing with --force-with-lease..."
+    git push origin "${branches_to_push[@]}" --force-with-lease
 }
 
 
@@ -274,7 +310,7 @@ cmd_help() {
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
     echo "  rebase                 Rebase the entire stack on the latest base branch ($BASE_BRANCH)."
-    echo "                         Works from any branch within the stack."
+    echo "  push                   Force-push all branches in the current stack to the remote."
     echo "  help                   Show this help message."
     echo ""
 }
@@ -302,6 +338,9 @@ main() {
             ;;
         rebase)
             cmd_rebase "$@"
+            ;;
+        push)
+            cmd_push "$@"
             ;;
         help|--help|-h)
             cmd_help
