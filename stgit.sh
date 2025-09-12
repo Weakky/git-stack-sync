@@ -433,38 +433,6 @@ cmd_prev() {
     fi
 }
 
-# Command: stgit rebase
-cmd_rebase() {
-    local original_branch
-    original_branch=$(get_current_branch)
-    echo "Current branch is '$original_branch'."
-
-    # Get the full stack in order from bottom to top
-    local stack_branches=()
-    local current_branch
-    current_branch=$(get_stack_top)
-    while [[ -n "$current_branch" && "$current_branch" != "$BASE_BRANCH" ]]; do
-        stack_branches=("$current_branch" "${stack_branches[@]}") # Prepend to get bottom-to-top
-        current_branch=$(get_parent_branch "$current_branch")
-    done
-
-    if [ ${#stack_branches[@]} -eq 0 ]; then
-        echo "Error: Could not determine stack. Rebasing current branch onto '$BASE_BRANCH'."
-        git rebase "origin/$BASE_BRANCH"
-        return
-    fi
-    
-    echo "Detected stack: ${stack_branches[*]}"
-    echo "Rebasing the entire stack onto the latest '$BASE_BRANCH'..."
-    
-    git fetch origin "$BASE_BRANCH" --quiet
-
-    _perform_iterative_rebase "rebase" "$original_branch" "" "origin/$BASE_BRANCH" "${stack_branches[@]}"
-    
-    echo "Stack rebased successfully!"
-    _finish_operation
-}
-
 # Command: stgit restack
 cmd_restack() {
     local original_branch
@@ -519,7 +487,7 @@ cmd_sync() {
     local original_branch
     original_branch=$(get_current_branch)
     
-    echo "Checking stack for merged parent branches..."
+    echo "Checking stack for merged parent branches and syncing with '$BASE_BRANCH'..."
     git fetch origin --quiet
 
     local stack_branches=()
@@ -535,7 +503,6 @@ cmd_sync() {
         return
     fi
 
-    local stack_was_modified=false
     local merged_branches_to_delete=()
 
     for branch in "${stack_branches[@]}"; do
@@ -568,7 +535,6 @@ cmd_sync() {
         fi
 
         if [[ "$is_merged" == true ]]; then
-            stack_was_modified=true
             local grandparent
             grandparent=$(get_parent_branch "$parent")
             if [[ -z "$grandparent" ]]; then
@@ -593,30 +559,25 @@ cmd_sync() {
     local unique_merged_branches
     unique_merged_branches=$(echo "${merged_branches_to_delete[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
 
-    if [ "$stack_was_modified" = true ]; then
-        echo "Stack structure updated. Performing a full rebase to apply changes..."
+    if [ ${#remaining_branches[@]} -gt 0 ]; then
+        local new_bottom_branch="${remaining_branches[0]}"
+        echo "Rebasing the stack starting from '$new_bottom_branch'."
         
-        if [ ${#remaining_branches[@]} -gt 0 ]; then
-            local new_bottom_branch="${remaining_branches[0]}"
-            echo "Starting rebase from the new bottom of the stack: '$new_bottom_branch'."
-            git checkout "$new_bottom_branch" >/dev/null 2>&1
-            
-            local new_base
-            new_base=$(get_parent_branch "$new_bottom_branch")
-            if [[ -z "$new_base" ]]; then new_base="origin/$BASE_BRANCH"; fi
-            
-            _perform_iterative_rebase "sync" "$original_branch" "$unique_merged_branches" "$new_base" "${remaining_branches[@]}"
-            
-            echo "Stack rebased successfully!"
-            _finish_operation
-
-        else
-            echo "All branches in the stack were merged. Nothing left to rebase."
+        local new_base
+        new_base=$(get_parent_branch "$new_bottom_branch")
+        if [[ -z "$new_base" || "$new_base" == "$BASE_BRANCH" ]]; then
+             new_base="origin/$BASE_BRANCH"
         fi
+        
+        _perform_iterative_rebase "sync" "$original_branch" "$unique_merged_branches" "$new_base" "${remaining_branches[@]}"
+        
+        echo "Stack synced and rebased successfully!"
+        _finish_operation
+
     else
-        echo "No merged branches found in the stack. Everything is up to date."
-        echo "Syncing with latest '$BASE_BRANCH' changes..."
-        cmd_rebase
+        echo "All branches in the stack were merged. Nothing left to rebase."
+        # If we are here, it means we might need to delete the last branch.
+        _finish_operation
     fi
 }
 
@@ -684,10 +645,10 @@ cmd_help() {
     echo "  create <branch-name>   Create a new branch on top of the current one."
     echo "  insert <branch-name>   Create and insert a new branch, updating GitHub PRs."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
-    echo "  sync                   Sync the stack after a parent branch has been merged."
+    echo "  sync                   Syncs the stack: rebases onto the latest base branch"
+    echo "                         and cleans up any merged parent branches."
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
-    echo "  rebase                 Rebase the entire stack on the latest base branch ($BASE_BRANCH)."
     echo "  restack                Update branches above the current one after making changes."
     echo "  push                   Force-push all branches in the current stack to the remote."
     echo "  pr                     Open the GitHub PR for the current branch in your browser."
@@ -719,9 +680,6 @@ main() {
             ;;
         prev)
             cmd_prev "$@"
-            ;;
-        rebase)
-            cmd_rebase "$@"
             ;;
         restack)
             cmd_restack "$@"
