@@ -212,6 +212,10 @@ cmd_insert() {
         local pr_number_to_update
         pr_number_to_update=$(get_pr_number "$original_child")
         if [[ -n "$pr_number_to_update" ]]; then
+            # We MUST push the new branch to the remote BEFORE we can set it as a PR base.
+            echo "Pushing new branch '$new_branch' to remote to enable PR base update..."
+            git push origin "$new_branch" >/dev/null 2>&1
+
             echo "Updating base of PR #${pr_number_to_update} for '$original_child' to '$new_branch'..."
             gh_api_call "PATCH" "pulls/${pr_number_to_update}" "base=$new_branch"
             echo "GitHub PR #${pr_number_to_update} updated."
