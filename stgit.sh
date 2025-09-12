@@ -7,12 +7,12 @@ set -e
 # --- Configuration ---
 # The base branch against which stacks are created and PRs are targeted.
 # You can change this to 'main', 'master', or your project's default branch.
-BASE_BRANCH="main"
+BASE_BRANCH="dev"
 
 # --- GitHub Configuration ---
 # IMPORTANT: You must change these to your own GitHub username/org and repo name.
-GH_USER="weakky"
-GH_REPO="stack-branch-test"
+GH_USER="your-github-username"
+GH_REPO="your-repo-name"
 
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
@@ -348,8 +348,11 @@ cmd_rebase() {
 
     echo "Stack rebased successfully!"
     
-    echo "Returning to original branch '$original_branch'."
-    git checkout "$original_branch" >/dev/null 2>&1
+    # Return to original branch if it still exists
+    if git rev-parse --verify "$original_branch" >/dev/null 2>&1; then
+      echo "Returning to original branch '$original_branch'."
+      git checkout "$original_branch" >/dev/null 2>&1
+    fi
     
     echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
 }
@@ -396,38 +399,92 @@ cmd_restack() {
 
 # Command: stgit sync
 cmd_sync() {
-    local current_branch
-    current_branch=$(get_current_branch)
-    local parent_branch
-    parent_branch=$(get_parent_branch "$current_branch")
+    local original_branch
+    original_branch=$(get_current_branch)
+    
+    echo "Checking stack for merged parent branches..."
+    git fetch origin --quiet
 
-    if [[ -z "$parent_branch" || "$parent_branch" == "$BASE_BRANCH" ]]; then
-        echo "Current branch '$current_branch' is not stacked on another feature branch. Nothing to sync."
+    local stack_branches=()
+    local current_branch_for_stack_build
+    current_branch_for_stack_build=$(get_stack_top)
+    while [[ -n "$current_branch_for_stack_build" && "$current_branch_for_stack_build" != "$BASE_BRANCH" ]]; do
+        stack_branches=("$current_branch_for_stack_build" "${stack_branches[@]}") # Prepend to get bottom-to-top
+        current_branch_for_stack_build=$(get_parent_branch "$current_branch_for_stack_build")
+    done
+
+    if [ ${#stack_branches[@]} -eq 0 ]; then
+        echo "Could not determine stack. Nothing to sync."
         return
     fi
 
-    echo "Checking status of parent branch '$parent_branch'..."
-    git fetch origin "$BASE_BRANCH" --quiet
+    local stack_was_modified=false
+    local merged_branches_to_delete=()
 
-    # Check if the parent branch's tip is an ancestor of the remote base branch
-    if git merge-base --is-ancestor "$parent_branch" "origin/$BASE_BRANCH"; then
-        echo "Parent branch '$parent_branch' has been merged into '$BASE_BRANCH'."
-        echo "Updating parent of '$current_branch' to '$BASE_BRANCH'."
-        set_parent_branch "$current_branch" "$BASE_BRANCH"
+    for branch in "${stack_branches[@]}"; do
+        local parent
+        parent=$(get_parent_branch "$branch")
 
-        # Now that the parent is correct, a simple rebase of the remaining stack will work.
+        if [[ -z "$parent" || "$parent" == "$BASE_BRANCH" ]]; then
+            continue
+        fi
+
+        # Check if the parent branch's tip is an ancestor of the remote base branch
+        if git merge-base --is-ancestor "$parent" "origin/$BASE_BRANCH"; then
+            stack_was_modified=true
+            local grandparent
+            grandparent=$(get_parent_branch "$parent")
+            if [[ -z "$grandparent" ]]; then
+                grandparent="$BASE_BRANCH"
+            fi
+            
+            echo "Parent branch '$parent' has been merged."
+            echo "Updating parent of '$branch' to '$grandparent'."
+            set_parent_branch "$branch" "$grandparent"
+            
+            # Add to a list to delete later, avoid modifying branch list while iterating
+            merged_branches_to_delete+=("$parent")
+        fi
+    done
+
+    if [ "$stack_was_modified" = true ]; then
+        echo "Stack structure updated. Performing a full rebase to apply changes..."
+        # We need to be on a branch within the stack for rebase to work correctly
+        git checkout "${stack_branches[0]}" >/dev/null 2>&1
         cmd_rebase
 
-        # Clean up the old, merged branch
-        read -p "Do you want to delete the local merged branch '$parent_branch'? (y/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            git branch -D "$parent_branch"
-            echo "Deleted local branch '$parent_branch'."
+        # Clean up the old, merged branches
+        # Use sort -u to only ask for each branch once
+        local unique_merged_branches
+        unique_merged_branches=$(echo "${merged_branches_to_delete[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+        
+        for branch_to_delete in $unique_merged_branches; do
+            read -p "Do you want to delete the local merged branch '$branch_to_delete'? (y/N) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                # Need to make sure we are not on the branch we are deleting
+                if [[ "$(get_current_branch)" == "$branch_to_delete" ]]; then
+                    # switch to a safe branch before deleting
+                    git checkout "$BASE_BRANCH"
+                fi
+                git branch -D "$branch_to_delete"
+                echo "Deleted local branch '$branch_to_delete'."
+            fi
+        done
+        
+        # Finally, return to the original branch if it still exists
+        if git rev-parse --verify "$original_branch" >/dev/null 2>&1; then
+            # The original branch might have been the one we just deleted
+            if [[ ! " ${unique_merged_branches[*]} " =~ " ${original_branch} " ]]; then
+                 git checkout "$original_branch"
+            fi
         fi
+
     else
-        echo "Parent branch '$parent_branch' has not been merged into '$BASE_BRANCH' yet."
-        echo "To update your stack with the latest changes from '$BASE_BRANCH', use 'stgit rebase'."
+        echo "No merged branches found in the stack. Everything is up to date."
+        # Even if no parents were merged, it's good practice to sync with the base branch
+        echo "Syncing with latest '$BASE_BRANCH' changes..."
+        cmd_rebase
     fi
 }
 
