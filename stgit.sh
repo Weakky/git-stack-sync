@@ -511,11 +511,14 @@ cmd_sync() {
             fi
         done
         
-        # Finally, return to the original branch if it still exists
+        # Finally, return to the original branch if it still exists and we're not on it
         if git rev-parse --verify "$original_branch" >/dev/null 2>&1; then
             # The original branch might have been the one we just deleted
             if [[ ! " ${unique_merged_branches[*]} " =~ " ${original_branch} " ]]; then
-                 git checkout "$original_branch"
+                 if [[ "$(get_current_branch)" != "$original_branch" ]]; then
+                    echo "Returning to original branch '$original_branch'."
+                    git checkout "$original_branch"
+                 fi
             fi
         fi
 
@@ -525,6 +528,8 @@ cmd_sync() {
         echo "Syncing with latest '$BASE_BRANCH' changes..."
         cmd_rebase
     fi
+
+    echo "Sync complete. Run 'stgit push' to push any updated branches to the remote."
 }
 
 
