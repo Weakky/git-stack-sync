@@ -43,3 +43,4 @@ git push origin br1
 increment_file_number file1
 git commit -am "increment file1"
 git push origin br2
+./stgit.sh submit
