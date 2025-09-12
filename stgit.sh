@@ -399,6 +399,7 @@ cmd_restack() {
 
 # Command: stgit sync
 cmd_sync() {
+    check_gh_auth
     local original_branch
     original_branch=$(get_current_branch)
     
@@ -429,8 +430,30 @@ cmd_sync() {
             continue
         fi
 
-        # Check if the parent branch's tip is an ancestor of the remote base branch
-        if git merge-base --is-ancestor "$parent" "origin/$BASE_BRANCH"; then
+        local pr_number
+        pr_number=$(get_pr_number "$parent")
+        local is_merged=false
+
+        if [[ -n "$pr_number" ]]; then
+            echo "Checking status of PR #${pr_number} for branch '$parent'..."
+            local pr_state
+            # Query PR state, handle potential errors if PR doesn't exist (e.g., deleted after merge)
+            pr_state=$(gh pr view "$pr_number" --json state --jq .state 2>/dev/null || echo "NOT_FOUND")
+
+            if [[ "$pr_state" == "MERGED" ]]; then
+                is_merged=true
+            fi
+        fi
+        
+        # Fallback for branches without a tracked PR number or if API fails
+        if [[ "$is_merged" == false ]]; then
+            if git merge-base --is-ancestor "$parent" "origin/$BASE_BRANCH"; then
+                echo "Parent branch '$parent' appears merged based on local commit history."
+                is_merged=true
+            fi
+        fi
+
+        if [[ "$is_merged" == true ]]; then
             stack_was_modified=true
             local grandparent
             grandparent=$(get_parent_branch "$parent")
