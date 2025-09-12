@@ -621,6 +621,101 @@ cmd_pr() {
     fi
 }
 
+cmd_status() {
+    check_gh_auth
+    log_step "Gathering stack status..."
+    git fetch origin --quiet
+
+    local stack_branches=()
+    local current_branch_for_stack_build
+    current_branch_for_stack_build=$(get_stack_top)
+    while [[ -n "$current_branch_for_stack_build" && "$current_branch_for_stack_build" != "$BASE_BRANCH" ]]; do
+        stack_branches=("$current_branch_for_stack_build" "${stack_branches[@]}")
+        current_branch_for_stack_build=$(get_parent_branch "$current_branch_for_stack_build")
+    done
+
+    if [ ${#stack_branches[@]} -eq 0 ]; then
+        log_warning "Not currently in a stack. Nothing to show."
+        log_suggestion "Run 'stgit create <branch-name>' to start a new stack."
+        return
+    fi
+
+    echo "" # Add a newline for better formatting
+    local stack_is_out_of_sync=false
+
+    for i in "${!stack_branches[@]}"; do
+        local branch="${stack_branches[i]}"
+        local parent
+        parent=$(get_parent_branch "$branch")
+        if [[ -z "$parent" ]]; then parent="$BASE_BRANCH"; fi
+
+        local is_current_branch=$([[ "$(get_current_branch)" == "$branch" ]] && echo " *" || echo "")
+        echo "➡️  $branch$is_current_branch (parent: $parent)"
+
+        local connector_char="├─"
+        if [ "$i" -eq $((${#stack_branches[@]} - 1)) ]; then
+            connector_char="└─"
+        fi
+
+        # --- Sync Status with Parent ---
+        local ahead
+        ahead=$(git rev-list --count "$parent..$branch")
+        local behind
+        behind=$(git rev-list --count "$branch..$parent")
+        
+        local parent_sync_status=""
+        if [[ "$behind" -gt 0 ]]; then
+            parent_sync_status="🟡 Diverged from '$parent' ($behind commits behind)"
+        elif [[ "$ahead" -eq 0 ]]; then
+            parent_sync_status="🟡 Identical to '$parent' (no new commits)"
+        else
+            parent_sync_status="🟢 Up to date with '$parent' ($ahead new commits)"
+        fi
+        echo "   $connector_char Sync: $parent_sync_status"
+        
+        # --- PR Status ---
+        local pr_number
+        pr_number=$(get_pr_number "$branch")
+        local pr_status=""
+        if [[ -n "$pr_number" ]]; then
+            local pr_info
+            pr_info=$(gh pr view "$pr_number" --json state,url --jq '{state: .state, url: .url}' 2>/dev/null || echo "{}")
+            local pr_state
+            pr_state=$(echo "$pr_info" | jq -r '.state')
+            local pr_url
+            pr_url=$(echo "$pr_info" | jq -r '.url')
+
+            if [[ "$pr_state" == "OPEN" ]]; then
+                pr_status="🟢 PR #$pr_number ($pr_state) - $pr_url"
+            elif [[ "$pr_state" == "MERGED" ]]; then
+                pr_status="🟣 PR #$pr_number ($pr_state)"
+            elif [[ "$pr_state" == "CLOSED" ]]; then
+                pr_status="🔴 PR #$pr_number ($pr_state)"
+            else
+                 pr_status="🟡 Could not fetch status for PR #$pr_number"
+            fi
+        else
+            pr_status="⚪ No PR submitted for this branch."
+        fi
+        echo "   └─ PR:   $pr_status"
+        
+        # Check if the branch is behind the main base branch
+        local behind_base
+        behind_base=$(git rev-list --count "$branch..origin/$BASE_BRANCH")
+        if [[ "$behind_base" -gt 0 ]]; then
+            stack_is_out_of_sync=true
+        fi
+    done
+    
+    echo "" # Trailing newline
+    if [[ "$stack_is_out_of_sync" == true ]]; then
+        log_warning "One or more branches are behind '$BASE_BRANCH'."
+        log_suggestion "Run 'stgit sync' to update the entire stack."
+    else
+        log_success "Stack is up to date with '$BASE_BRANCH'."
+    fi
+}
+
 
 cmd_help() {
     echo "stgit - A tool for managing stacked Git branches with GitHub integration."
@@ -633,6 +728,7 @@ cmd_help() {
     echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
+    echo "  status                 Display the status of the current branch stack."
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
     echo "  restack                Update branches above the current one after making changes."
@@ -653,6 +749,7 @@ main() {
         insert) cmd_insert "$@";;
         submit) cmd_submit "$@";;
         sync) cmd_sync "$@";;
+        status) cmd_status "$@";;
         next) cmd_next "$@";;
         prev) cmd_prev "$@";;
         restack) cmd_restack "$@";;
