@@ -28,6 +28,16 @@ fi
 
 # --- Internal Functions ---
 
+# Helper function to check for GitHub CLI authentication.
+check_gh_auth() {
+    if ! gh auth status &>/dev/null; then
+        echo "Error: You are not logged into the GitHub CLI." >&2
+        echo "Please run 'gh auth login' to authenticate." >&2
+        exit 1
+    fi
+}
+
+
 # Helper function to get the current branch name.
 get_current_branch() {
     git rev-parse --abbrev-ref HEAD
@@ -115,11 +125,13 @@ gh_api_call() {
     local endpoint=$2
     local data=$3
     
+    # Removed '2>/dev/null' to ensure API errors from 'gh' are visible.
+    # The 'set -e' at the top of the script will cause it to exit on failure.
     gh api "repos/${GH_USER}/${GH_REPO}/${endpoint}" \
         --method "$method" \
         -H "Accept: application/vnd.github.v3+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        ${data:+-f "$data"} 2>/dev/null # Suppress curl progress
+        ${data:+-f "$data"}
 }
 
 
@@ -145,6 +157,7 @@ cmd_create() {
 
 # Command: stgit insert <branch-name>
 cmd_insert() {
+    check_gh_auth
     if [[ -z "$1" ]]; then
         echo "Error: Branch name is required."
         echo "Usage: stgit insert <branch-name>"
@@ -203,6 +216,7 @@ cmd_insert() {
 
 # Command: stgit submit
 cmd_submit() {
+    check_gh_auth
     echo "Syncing stack with GitHub..."
     local bottom_branch
     bottom_branch=$(get_stack_bottom)
@@ -366,6 +380,7 @@ cmd_push() {
 
 # Command: stgit pr
 cmd_pr() {
+    check_gh_auth
     local current_branch
     current_branch=$(get_current_branch)
     local pr_number
@@ -445,3 +460,4 @@ main() {
 }
 
 main "$@"
+
