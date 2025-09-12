@@ -286,6 +286,13 @@ cmd_submit() {
 cmd_next() {
     local current_branch
     current_branch=$(get_current_branch)
+
+    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+        echo "You are on the base branch ('$BASE_BRANCH'). Cannot go 'next'."
+        echo "There could be multiple stacks branching from here. Please check out a specific branch first."
+        return
+    fi
+    
     local child_branch
     child_branch=$(get_child_branch "$current_branch")
     
@@ -293,7 +300,7 @@ cmd_next() {
         git checkout "$child_branch"
         echo "Checked out child branch: $child_branch"
     else
-        echo "No child branch found for '$current_branch'. You might be at the top of the stack."
+        echo "No child branch found for '$current_branch'. You are at the top of the stack."
     fi
 }
 
@@ -301,6 +308,12 @@ cmd_next() {
 cmd_prev() {
     local current_branch
     current_branch=$(get_current_branch)
+
+    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+        echo "You are on the base branch ('$BASE_BRANCH'). Cannot go 'prev'."
+        return
+    fi
+    
     local parent
     parent=$(get_parent_branch "$current_branch")
 
@@ -308,7 +321,7 @@ cmd_prev() {
         git checkout "$parent"
         echo "Checked out parent branch: $parent"
     else
-        echo "No parent branch found for '$current_branch'. You might be at the bottom of the stack."
+        echo "No parent branch found for '$current_branch'. You are at the bottom of the stack."
     fi
 }
 
