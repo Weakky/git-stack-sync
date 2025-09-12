@@ -472,9 +472,25 @@ cmd_sync() {
 
     if [ "$stack_was_modified" = true ]; then
         echo "Stack structure updated. Performing a full rebase to apply changes..."
-        # We need to be on a branch within the stack for rebase to work correctly
-        git checkout "${stack_branches[0]}" >/dev/null 2>&1
-        cmd_rebase
+
+        # Find the new bottom of the stack to start the rebase from a valid branch
+        local new_bottom_branch=""
+        for branch in "${stack_branches[@]}"; do
+            # Check if this branch was NOT one of the merged ones.
+            # The spaces around the variables are important for exact matching.
+            if [[ ! " ${merged_branches_to_delete[*]} " =~ " ${branch} " ]]; then
+                new_bottom_branch="$branch"
+                break
+            fi
+        done
+
+        if [[ -n "$new_bottom_branch" ]]; then
+            echo "Starting rebase from the new bottom of the stack: '$new_bottom_branch'."
+            git checkout "$new_bottom_branch" >/dev/null 2>&1
+            cmd_rebase
+        else
+            echo "All branches in the stack were merged. Nothing left to rebase."
+        fi
 
         # Clean up the old, merged branches
         # Use sort -u to only ask for each branch once
