@@ -346,6 +346,38 @@ cmd_rebase() {
     echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
 }
 
+# Command: stgit restack
+cmd_restack() {
+    local original_branch
+    original_branch=$(get_current_branch)
+    echo "Current branch is '$original_branch'."
+
+    local top_branch
+    top_branch=$(get_stack_top)
+
+    if [[ "$original_branch" == "$top_branch" ]]; then
+        echo "You are at the top of the stack. Nothing to restack."
+        return
+    fi
+    
+    echo "Restacking branches above '$original_branch'..."
+    
+    # Temporarily check out the top branch to perform the rebase from there
+    echo "Temporarily checking out '$top_branch'..."
+    git checkout "$top_branch" >/dev/null 2>&1
+
+    # Rebase the top of the stack onto the current branch.
+    # --update-refs will handle all intermediate branches.
+    git rebase "$original_branch" --update-refs
+
+    echo "Stack successfully restacked on top of '$original_branch'."
+
+    echo "Returning to original branch '$original_branch'."
+    git checkout "$original_branch" >/dev/null 2>&1
+    
+    echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
+}
+
 # Command: stgit push
 cmd_push() {
     echo "Collecting all branches in the stack..."
@@ -412,6 +444,7 @@ cmd_help() {
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
     echo "  rebase                 Rebase the entire stack on the latest base branch ($BASE_BRANCH)."
+    echo "  restack                Update branches above the current one after making changes."
     echo "  push                   Force-push all branches in the current stack to the remote."
     echo "  pr                     Open the GitHub PR for the current branch in your browser."
     echo "  help                   Show this help message."
@@ -441,6 +474,9 @@ main() {
             ;;
         rebase)
             cmd_rebase "$@"
+            ;;
+        restack)
+            cmd_restack "$@"
             ;;
         push)
             cmd_push "$@"
