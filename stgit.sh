@@ -17,15 +17,40 @@ GH_REPO="stack-branch-test"
 # --- Internal State ---
 STATE_FILE=".git/STGIT_OPERATION_STATE"
 
+# --- Logging Helpers ---
+log_success() {
+    echo "🟢 $1"
+}
+
+log_error() {
+    echo "🔴 Error: $1" >&2
+}
+
+log_warning() {
+    echo "🟡 Warning: $1"
+}
+
+log_info() {
+    echo "   $1"
+}
+
+log_step() {
+    echo "➡️  $1"
+}
+
+log_suggestion() {
+    echo "💡 Next step: $1"
+}
+
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
-    echo "Error: The GitHub CLI ('gh') is not installed."
-    echo "Please install it to use GitHub integration features: https://cli.github.com/"
+    log_error "The GitHub CLI ('gh') is not installed."
+    log_info "Please install it to use GitHub integration features: https://cli.github.com/"
     exit 1
 fi
 if ! command -v jq &> /dev/null; then
-    echo "Error: 'jq' is not installed."
-    echo "Please install it to parse API responses: https://stedolan.github.io/jq/"
+    log_error "'jq' is not installed."
+    log_info "Please install it to parse API responses: https://stedolan.github.io/jq/"
     exit 1
 fi
 
@@ -34,8 +59,8 @@ fi
 # Helper function to check for GitHub CLI authentication.
 check_gh_auth() {
     if ! gh auth status &>/dev/null; then
-        echo "Error: You are not logged into the GitHub CLI." >&2
-        echo "Please run 'gh auth login' to authenticate." >&2
+        log_error "You are not logged into the GitHub CLI."
+        log_suggestion "Run 'gh auth login' to authenticate."
         exit 1
     fi
 }
@@ -165,14 +190,16 @@ _perform_iterative_rebase() {
     fi
 
     for branch in "${branches_to_rebase[@]}"; do
-        echo "--- Rebasing '$branch' onto '$new_base' ---"
+        log_step "Rebasing '$branch' onto '$new_base'..."
         git checkout "$branch" >/dev/null 2>&1
         if ! git rebase "$new_base"; then
-            echo "" >&2
-            echo "🛑 Rebase conflict detected." >&2
-            echo "1. Resolve the conflicts and run 'git add <files>'." >&2
-            echo "2. Run 'git rebase --continue'." >&2
-            echo "3. Once the entire git rebase is complete, run 'stgit continue' to finish the operation." >&2
+            echo ""
+            log_error "Rebase conflict detected while rebasing '$branch'."
+            log_info "Please follow these steps to resolve:"
+            log_info "1. Open the conflicting files and resolve the issues."
+            log_info "2. Run 'git add <resolved-files>'."
+            log_info "3. Run 'git rebase --continue'."
+            log_info "4. Once the git rebase process is fully complete, run 'stgit continue'."
             exit 1
         fi
         
@@ -182,10 +209,10 @@ _perform_iterative_rebase() {
         if [[ "$commit_count" -eq 0 ]]; then
             local pr_number_to_check
             pr_number_to_check=$(get_pr_number "$branch")
-            echo "⚠️  WARNING: After rebasing, branch '$branch' contains no new changes compared to '$new_base'."
+            log_warning "After rebasing, branch '$branch' has no new changes compared to '$new_base'."
             if [[ -n "$pr_number_to_check" ]]; then
-                echo "    This can happen if changes from this branch were also introduced into its parent."
-                echo "    Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
+                log_info "This can happen if changes from this branch were also introduced into its parent."
+                log_info "Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
             fi
         fi
 
@@ -196,55 +223,50 @@ _perform_iterative_rebase() {
 # Internal function to finalize an operation, called by successful commands AND by 'continue'.
 _finish_operation() {
     if [ ! -f "$STATE_FILE" ]; then
-        # Should not happen if called correctly, but good for safety.
         return
     fi
     
-    # Source the state file to get the context of the interrupted operation.
     # shellcheck source=/dev/null
     source "$STATE_FILE"
 
-    echo "Finishing up the previous stgit operation..."
+    log_step "Finishing operation..."
 
-    # Perform command-specific cleanup logic.
     if [[ "${COMMAND}" == "sync" && -n "${MERGED_BRANCHES_TO_DELETE}" ]]; then
         for branch_to_delete in ${MERGED_BRANCHES_TO_DELETE}; do
             read -p "Do you want to delete the local merged branch '$branch_to_delete'? (y/N) " -n 1 -r
             echo
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 if [[ "$(get_current_branch)" == "$branch_to_delete" ]]; then
-                    git checkout "$BASE_BRANCH"
+                    git checkout "$BASE_BRANCH" >/dev/null 2>&1
                 fi
-                git branch -D "$branch_to_delete"
-                echo "Deleted local branch '$branch_to_delete'."
+                git branch -D "$branch_to_delete" >/dev/null 2>&1
+                log_success "Deleted local branch '$branch_to_delete'."
             fi
         done
     fi
 
-    # Return to original branch if it still exists
     if git rev-parse --verify "$ORIGINAL_BRANCH" >/dev/null 2>&1; then
         if [[ "$(get_current_branch)" != "$ORIGINAL_BRANCH" ]]; then
-            echo "Returning to original branch '$ORIGINAL_BRANCH'."
+            log_info "Returning to original branch '$ORIGINAL_BRANCH'."
             git checkout "$ORIGINAL_BRANCH" >/dev/null 2>&1
         fi
     else
-      echo "Original branch '$ORIGINAL_BRANCH' no longer exists. Returning to '$BASE_BRANCH'."
+      log_warning "Original branch '$ORIGINAL_BRANCH' no longer exists. Returning to '$BASE_BRANCH'."
       git checkout "$BASE_BRANCH" >/dev/null 2>&1
     fi
 
     rm -f "$STATE_FILE"
-    echo "Operation complete. Local branches have been updated."
-    echo "Run 'stgit push' to push them to the remote."
+    log_success "Operation complete."
+    log_suggestion "Run 'stgit push' to update your remote branches."
 }
 
 
 # --- CLI Commands ---
 
-# Command: stgit create <branch-name>
 cmd_create() {
     if [[ -z "$1" ]]; then
-        echo "Error: Branch name is required."
-        echo "Usage: stgit create <branch-name>"
+        log_error "Branch name is required."
+        log_info "Usage: stgit create <branch-name>"
         exit 1
     fi
 
@@ -252,18 +274,17 @@ cmd_create() {
     parent_branch=$(get_current_branch)
     local new_branch=$1
 
-    git checkout -b "$new_branch"
+    git checkout -b "$new_branch" >/dev/null 2>&1
     set_parent_branch "$new_branch" "$parent_branch"
-    echo "Created and checked out new branch '$new_branch' based on '$parent_branch'."
-    echo "Parent relationship stored in git config."
+    log_success "Created and checked out new branch '$new_branch' (parent: '$parent_branch')."
+    log_suggestion "Add commits or run 'stgit create <next-branch>' to extend the stack."
 }
 
-# Command: stgit insert <branch-name>
 cmd_insert() {
     check_gh_auth
     if [[ -z "$1" ]]; then
-        echo "Error: Branch name is required."
-        echo "Usage: stgit insert <branch-name>"
+        log_error "Branch name is required."
+        log_info "Usage: stgit insert <branch-name>"
         exit 1
     fi
 
@@ -274,16 +295,14 @@ cmd_insert() {
     local original_child
     original_child=$(get_child_branch "$parent_branch")
 
-    # Create the new branch and set its parent.
-    git checkout -b "$new_branch"
+    log_step "Creating new branch '$new_branch'..."
+    git checkout -b "$new_branch" >/dev/null 2>&1
     set_parent_branch "$new_branch" "$parent_branch"
-    echo "Created branch '$new_branch' on top of '$parent_branch'."
+    log_success "Created branch '$new_branch' on top of '$parent_branch'."
 
-    # If there was a child, we need to rebase it and its children onto the new branch.
     if [[ -n "$original_child" ]]; then
-        echo "Found subsequent branch '$original_child'. Rebasing it and its descendants onto '$new_branch'..."
+        log_step "Rebasing descendant branches onto '$new_branch'..."
         
-        # Get the full sub-stack starting from original_child
         local sub_stack=()
         local current_sub_branch="$original_child"
         while [[ -n "$current_sub_branch" ]]; do
@@ -291,81 +310,71 @@ cmd_insert() {
             current_sub_branch=$(get_child_branch "$current_sub_branch")
         done
 
-        # Iteratively rebase the sub-stack
         local new_base="$new_branch"
         for branch in "${sub_stack[@]}"; do
-            echo "--- Rebasing '$branch' onto '$new_base' ---"
+            log_info "Rebasing '$branch'..."
             git checkout "$branch" >/dev/null 2>&1
-            git rebase "$new_base"
+            git rebase "$new_base" >/dev/null 2>&1
             new_base="$branch"
         done
 
-        # Update the parent of the first child
         set_parent_branch "$original_child" "$new_branch"
-        echo "Updated parent of '$original_child' to be '$new_branch'."
+        log_success "Updated parent of '$original_child' to be '$new_branch'."
         
-        # Update GitHub PR base
         local pr_number_to_update
         pr_number_to_update=$(get_pr_number "$original_child")
         if [[ -n "$pr_number_to_update" ]]; then
-            # We MUST push the new branch to the remote BEFORE we can set it as a PR base.
-            echo "Pushing new branch '$new_branch' to remote to enable PR base update..."
+            log_step "Updating GitHub PR for '$original_child'..."
+            log_info "Pushing new branch '$new_branch' to remote..."
             git push origin "$new_branch" >/dev/null 2>&1
 
-            echo "Updating base of PR #${pr_number_to_update} for '$original_child' to '$new_branch'..."
-            gh_api_call "PATCH" "pulls/${pr_number_to_update}" "base=$new_branch"
-            echo "GitHub PR #${pr_number_to_update} updated."
+            log_info "Setting base of PR #${pr_number_to_update} to '$new_branch'..."
+            gh_api_call "PATCH" "pulls/${pr_number_to_update}" "base=$new_branch" >/dev/null
+            log_success "GitHub PR #${pr_number_to_update} updated."
         fi
         
-        # Checkout the new branch at the end for the user
         git checkout "$new_branch" >/dev/null 2>&1
     fi
 
-    echo "Successfully inserted '$new_branch' into the stack."
+    log_success "Successfully inserted '$new_branch' into the stack."
+    log_suggestion "Add commits, then run 'stgit submit' to create a PR."
 }
 
-# Command: stgit submit
 cmd_submit() {
     check_gh_auth
-    echo "Syncing stack with GitHub..."
+    log_step "Syncing stack with GitHub..."
     
     local stack_branches=()
     local current_branch
     current_branch=$(get_stack_top)
 
-    # Collect all branches in the stack from top to bottom
     while [[ -n "$current_branch" && "$current_branch" != "$BASE_BRANCH" ]]; do
         stack_branches+=("$current_branch")
         current_branch=$(get_parent_branch "$current_branch")
     done
     
-    # Iterate from bottom to top (reverse order) to create PRs in order
     for (( i=${#stack_branches[@]}-1 ; i>=0 ; i-- )) ; do
         local branch_name="${stack_branches[i]}"
         local pr_number
         pr_number=$(get_pr_number "$branch_name")
 
         if [[ -n "$pr_number" ]]; then
-            echo "PR #${pr_number} already exists for branch '$branch_name'."
+            log_info "PR #${pr_number} already exists for branch '$branch_name'."
             continue
         fi
 
         local parent
         parent=$(get_parent_branch "$branch_name")
-        if [[ -z "$parent" ]]; then
-          parent="$BASE_BRANCH"
-        fi
+        if [[ -z "$parent" ]]; then parent="$BASE_BRANCH"; fi
 
-        # Check for new commits before trying to create a PR
         local commit_count
         commit_count=$(git rev-list --count "${parent}".."${branch_name}")
         if [[ "$commit_count" -eq 0 ]]; then
-            echo "Skipping PR for '$branch_name': No new commits compared to '$parent'."
+            log_warning "Skipping PR for '$branch_name': No new commits compared to '$parent'."
             continue
         fi
         
-        echo "Creating PR for '$branch_name' to be merged into '$parent'..."
-        # First, ensure the branch exists on the remote
+        log_step "Creating PR for '$branch_name'..."
         git push origin "$branch_name" --force-with-lease >/dev/null 2>&1
 
         local pr_title
@@ -379,25 +388,24 @@ cmd_submit() {
         
         if [[ -n "$new_pr_number" && "$new_pr_number" != "null" ]]; then
             set_pr_number "$branch_name" "$new_pr_number"
-            echo "Successfully created PR #${new_pr_number} for '$branch_name'."
+            log_success "Created PR #${new_pr_number} for '$branch_name'."
         else
-            echo "Failed to create PR for '$branch_name'."
-            echo "Response: $pr_response"
+            log_error "Failed to create PR for '$branch_name'."
+            log_info "Response from GitHub: $pr_response"
         fi
     done
 
-    echo "Stack submission complete."
+    log_success "Stack submission complete."
 }
 
 
-# Command: stgit next
 cmd_next() {
     local current_branch
     current_branch=$(get_current_branch)
 
     if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-        echo "You are on the base branch ('$BASE_BRANCH'). Cannot go 'next'."
-        echo "There could be multiple stacks branching from here. Please check out a specific branch first."
+        log_error "You are on the base branch ('$BASE_BRANCH'). Cannot go 'next'."
+        log_info "There could be multiple stacks. Please 'git checkout' a specific branch first."
         return
     fi
     
@@ -405,20 +413,19 @@ cmd_next() {
     child_branch=$(get_child_branch "$current_branch")
     
     if [[ -n "$child_branch" ]]; then
-        git checkout "$child_branch"
-        echo "Checked out child branch: $child_branch"
+        git checkout "$child_branch" >/dev/null 2>&1
+        log_success "Checked out child branch: $child_branch"
     else
-        echo "No child branch found for '$current_branch'. You are at the top of the stack."
+        log_warning "No child branch found. You are at the top of the stack."
     fi
 }
 
-# Command: stgit prev
 cmd_prev() {
     local current_branch
     current_branch=$(get_current_branch)
 
     if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-        echo "You are on the base branch ('$BASE_BRANCH'). Cannot go 'prev'."
+        log_error "You are on the base branch ('$BASE_BRANCH'). Cannot go 'prev'."
         return
     fi
     
@@ -426,54 +433,47 @@ cmd_prev() {
     parent=$(get_parent_branch "$current_branch")
 
     if [[ -n "$parent" ]]; then
-        git checkout "$parent"
-        echo "Checked out parent branch: $parent"
+        git checkout "$parent" >/dev/null 2>&1
+        log_success "Checked out parent branch: $parent"
     else
-        echo "No parent branch found for '$current_branch'. You are at the bottom of the stack."
+        log_warning "No parent branch found. You are at the bottom of the stack."
     fi
 }
 
-# Command: stgit restack
 cmd_restack() {
     local original_branch
     original_branch=$(get_current_branch)
-    echo "Current branch is '$original_branch'."
+    log_step "Restacking branches on top of '$original_branch'..."
 
-    # Get the branches above the current one, in order from bottom to top.
     local branches_to_restack=()
     local current_child
     current_child=$(get_child_branch "$original_branch")
 
     while [[ -n "$current_child" ]]; do
         branches_to_restack+=("$current_child")
-        current_child=$(get_child_branch "$current_child") # Keep looking up the chain
+        current_child=$(get_child_branch "$current_child")
     done
 
     if [ ${#branches_to_restack[@]} -eq 0 ]; then
-        echo "You are at the top of the stack. Nothing to restack."
+        log_warning "You are at the top of the stack. Nothing to restack."
         return
     fi
     
-    echo "Detected subsequent stack: ${branches_to_restack[*]}"
-    echo "Restacking branches above '$original_branch'..."
-
+    log_info "Detected subsequent stack: ${branches_to_restack[*]}"
     _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "${branches_to_restack[@]}"
     
-    echo "Stack successfully restacked on top of '$original_branch'."
     _finish_operation
 }
 
-# Command: stgit continue
 cmd_continue() {
-    # Check if a git rebase is still in progress
     if [ -d ".git/rebase-merge" ] || [ -d ".git/rebase-apply" ]; then
-        echo "A git rebase is still in progress." >&2
-        echo "Please resolve conflicts and run 'git rebase --continue' until it is complete." >&2
+        log_error "A git rebase is still in progress."
+        log_suggestion "Run 'git rebase --continue' until it is complete, then run 'stgit continue'."
         exit 1
     fi
     
     if [ ! -f "$STATE_FILE" ]; then
-        echo "No stgit operation to continue. Nothing to do."
+        log_warning "No stgit operation to continue. Nothing to do."
         return
     fi
 
@@ -481,25 +481,24 @@ cmd_continue() {
 }
 
 
-# Command: stgit sync
 cmd_sync() {
     check_gh_auth
     local original_branch
     original_branch=$(get_current_branch)
     
-    echo "Checking stack for merged parent branches and syncing with '$BASE_BRANCH'..."
+    log_step "Syncing stack with '$BASE_BRANCH' and checking for merged branches..."
     git fetch origin --quiet
 
     local stack_branches=()
     local current_branch_for_stack_build
     current_branch_for_stack_build=$(get_stack_top)
     while [[ -n "$current_branch_for_stack_build" && "$current_branch_for_stack_build" != "$BASE_BRANCH" ]]; do
-        stack_branches=("$current_branch_for_stack_build" "${stack_branches[@]}") # Prepend to get bottom-to-top
+        stack_branches=("$current_branch_for_stack_build" "${stack_branches[@]}")
         current_branch_for_stack_build=$(get_parent_branch "$current_branch_for_stack_build")
     done
 
     if [ ${#stack_branches[@]} -eq 0 ]; then
-        echo "Could not determine stack. Nothing to sync."
+        log_warning "Could not determine stack. Nothing to sync."
         return
     fi
 
@@ -509,27 +508,21 @@ cmd_sync() {
         local parent
         parent=$(get_parent_branch "$branch")
 
-        if [[ -z "$parent" || "$parent" == "$BASE_BRANCH" ]]; then
-            continue
-        fi
+        if [[ -z "$parent" || "$parent" == "$BASE_BRANCH" ]]; then continue; fi
 
         local pr_number
         pr_number=$(get_pr_number "$parent")
         local is_merged=false
 
         if [[ -n "$pr_number" ]]; then
-            echo "Checking status of PR #${pr_number} for branch '$parent'..."
+            log_info "Checking status of PR #${pr_number} for branch '$parent'..."
             local pr_state
             pr_state=$(gh pr view "$pr_number" --json state --jq .state 2>/dev/null || echo "NOT_FOUND")
-
-            if [[ "$pr_state" == "MERGED" ]]; then
-                is_merged=true
-            fi
+            if [[ "$pr_state" == "MERGED" ]]; then is_merged=true; fi
         fi
         
         if [[ "$is_merged" == false ]]; then
             if git merge-base --is-ancestor "$parent" "origin/$BASE_BRANCH"; then
-                echo "Parent branch '$parent' appears merged based on local commit history."
                 is_merged=true
             fi
         fi
@@ -537,19 +530,16 @@ cmd_sync() {
         if [[ "$is_merged" == true ]]; then
             local grandparent
             grandparent=$(get_parent_branch "$parent")
-            if [[ -z "$grandparent" ]]; then
-                grandparent="$BASE_BRANCH"
-            fi
+            if [[ -z "$grandparent" ]]; then grandparent="$BASE_BRANCH"; fi
             
-            echo "Parent branch '$parent' has been merged."
-            echo "Updating parent of '$branch' to '$grandparent'."
+            log_success "Parent branch '$parent' has been merged."
+            log_info "Updating parent of '$branch' to '$grandparent'."
             set_parent_branch "$branch" "$grandparent"
             
             merged_branches_to_delete+=("$parent")
         fi
     done
 
-    # Get the final list of remaining and merged branches for the operation.
     local remaining_branches=()
     for branch in "${stack_branches[@]}"; do
         if [[ ! " ${merged_branches_to_delete[*]} " =~ " ${branch} " ]]; then
@@ -561,7 +551,7 @@ cmd_sync() {
 
     if [ ${#remaining_branches[@]} -gt 0 ]; then
         local new_bottom_branch="${remaining_branches[0]}"
-        echo "Rebasing the stack starting from '$new_bottom_branch'."
+        log_step "Rebasing remaining stack onto '$BASE_BRANCH'..."
         
         local new_base
         new_base=$(get_parent_branch "$new_bottom_branch")
@@ -571,20 +561,17 @@ cmd_sync() {
         
         _perform_iterative_rebase "sync" "$original_branch" "$unique_merged_branches" "$new_base" "${remaining_branches[@]}"
         
-        echo "Stack synced and rebased successfully!"
         _finish_operation
 
     else
-        echo "All branches in the stack were merged. Nothing left to rebase."
-        # If we are here, it means we might need to delete the last branch.
+        log_warning "All branches in the stack were merged. Nothing left to rebase."
         _finish_operation
     fi
 }
 
 
-# Command: stgit push
 cmd_push() {
-    echo "Collecting all branches in the stack..."
+    log_step "Collecting all branches in the stack..."
     local top_branch
     top_branch=$(get_stack_top)
     
@@ -597,27 +584,27 @@ cmd_push() {
     done
     
     if [ ${#branches_to_push[@]} -eq 0 ]; then
-        echo "No stack branches found to push."
+        log_error "No stack branches found to push."
         exit 1
     fi
 
     echo "Will force-push the following branches:"
     for branch in "${branches_to_push[@]}"; do
-        echo "  - $branch"
+        log_info "$branch"
     done
     
     read -p "Are you sure? (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Push cancelled."
+        log_warning "Push cancelled."
         exit 1
     fi
 
-    echo "Pushing with --force-with-lease..."
+    log_step "Pushing with --force-with-lease..."
     git push origin "${branches_to_push[@]}" --force-with-lease
+    log_success "All branches pushed."
 }
 
-# Command: stgit pr
 cmd_pr() {
     check_gh_auth
     local current_branch
@@ -626,16 +613,15 @@ cmd_pr() {
     pr_number=$(get_pr_number "$current_branch")
 
     if [[ -n "$pr_number" ]]; then
-        echo "Opening PR #${pr_number} for branch '$current_branch' in browser..."
+        log_step "Opening PR #${pr_number} for branch '$current_branch' in browser..."
         gh pr view "$pr_number" --web
     else
-        echo "No pull request found for branch '$current_branch'."
-        echo "You can create one by running 'stgit submit'."
+        log_error "No pull request found for branch '$current_branch'."
+        log_suggestion "Run 'stgit submit' to create one."
     fi
 }
 
 
-# Command: stgit help
 cmd_help() {
     echo "stgit - A tool for managing stacked Git branches with GitHub integration."
     echo ""
@@ -663,44 +649,20 @@ main() {
     shift || true
 
     case "$cmd" in
-        create)
-            cmd_create "$@"
-            ;;
-        insert)
-            cmd_insert "$@"
-            ;;
-        submit)
-            cmd_submit "$@"
-            ;;
-        sync)
-            cmd_sync "$@"
-            ;;
-        next)
-            cmd_next "$@"
-            ;;
-        prev)
-            cmd_prev "$@"
-            ;;
-        restack)
-            cmd_restack "$@"
-            ;;
-        continue)
-            cmd_continue "$@"
-            ;;
-        push)
-            cmd_push "$@"
-            ;;
-        pr)
-            cmd_pr "$@"
-            ;;
-        help|--help|-h)
-            cmd_help
-            ;;
-        "")
-            cmd_help
-            ;;
+        create) cmd_create "$@";;
+        insert) cmd_insert "$@";;
+        submit) cmd_submit "$@";;
+        sync) cmd_sync "$@";;
+        next) cmd_next "$@";;
+        prev) cmd_prev "$@";;
+        restack) cmd_restack "$@";;
+        continue) cmd_continue "$@";;
+        push) cmd_push "$@";;
+        pr) cmd_pr "$@";;
+        help|--help|-h) cmd_help;;
+        "") cmd_help;;
         *)
-            echo "Unknown command: $cmd"
+            log_error "Unknown command: $cmd"
             cmd_help
             exit 1
             ;;
