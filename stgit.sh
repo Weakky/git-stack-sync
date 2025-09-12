@@ -7,12 +7,12 @@ set -e
 # --- Configuration ---
 # The base branch against which stacks are created and PRs are targeted.
 # You can change this to 'main', 'master', or your project's default branch.
-BASE_BRANCH="main"
+BASE_BRANCH="dev"
 
 # --- GitHub Configuration ---
 # IMPORTANT: You must change these to your own GitHub username/org and repo name.
-GH_USER="weakky"
-GH_REPO="stack-branch-test"
+GH_USER="your-github-username"
+GH_REPO="your-repo-name"
 
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
@@ -336,7 +336,7 @@ cmd_rebase() {
     echo "Detected stack: ${stack_branches[*]}"
     echo "Rebasing the entire stack onto the latest '$BASE_BRANCH'..."
 
-    git fetch origin "$BASE_BRANCH"
+    git fetch origin "$BASE_BRANCH" --quiet
 
     local new_base="origin/$BASE_BRANCH"
     for branch in "${stack_branches[@]}"; do
@@ -393,6 +393,44 @@ cmd_restack() {
     
     echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
 }
+
+# Command: stgit sync
+cmd_sync() {
+    local current_branch
+    current_branch=$(get_current_branch)
+    local parent_branch
+    parent_branch=$(get_parent_branch "$current_branch")
+
+    if [[ -z "$parent_branch" || "$parent_branch" == "$BASE_BRANCH" ]]; then
+        echo "Current branch '$current_branch' is not stacked on another feature branch. Nothing to sync."
+        return
+    fi
+
+    echo "Checking status of parent branch '$parent_branch'..."
+    git fetch origin "$BASE_BRANCH" --quiet
+
+    # Check if the parent branch's tip is an ancestor of the remote base branch
+    if git merge-base --is-ancestor "$parent_branch" "origin/$BASE_BRANCH"; then
+        echo "Parent branch '$parent_branch' has been merged into '$BASE_BRANCH'."
+        echo "Updating parent of '$current_branch' to '$BASE_BRANCH'."
+        set_parent_branch "$current_branch" "$BASE_BRANCH"
+
+        # Now that the parent is correct, a simple rebase of the remaining stack will work.
+        cmd_rebase
+
+        # Clean up the old, merged branch
+        read -p "Do you want to delete the local merged branch '$parent_branch'? (y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            git branch -D "$parent_branch"
+            echo "Deleted local branch '$parent_branch'."
+        fi
+    else
+        echo "Parent branch '$parent_branch' has not been merged into '$BASE_BRANCH' yet."
+        echo "To update your stack with the latest changes from '$BASE_BRANCH', use 'stgit rebase'."
+    fi
+}
+
 
 # Command: stgit push
 cmd_push() {
@@ -457,6 +495,7 @@ cmd_help() {
     echo "  create <branch-name>   Create a new branch on top of the current one."
     echo "  insert <branch-name>   Create and insert a new branch, updating GitHub PRs."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
+    echo "  sync                   Sync the stack after a parent branch has been merged."
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
     echo "  rebase                 Rebase the entire stack on the latest base branch ($BASE_BRANCH)."
@@ -481,6 +520,9 @@ main() {
             ;;
         submit)
             cmd_submit "$@"
+            ;;
+        sync)
+            cmd_sync "$@"
             ;;
         next)
             cmd_next "$@"
