@@ -7,12 +7,12 @@ set -e
 # --- Configuration ---
 # The base branch against which stacks are created and PRs are targeted.
 # You can change this to 'main', 'master', or your project's default branch.
-BASE_BRANCH="dev"
+BASE_BRANCH="main"
 
 # --- GitHub Configuration ---
 # IMPORTANT: You must change these to your own GitHub username/org and repo name.
-GH_USER="your-github-username"
-GH_REPO="your-repo-name"
+GH_USER="weakky"
+GH_REPO="stack-branch-test"
 
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
