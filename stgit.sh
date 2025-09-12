@@ -7,12 +7,12 @@ set -e
 # --- Configuration ---
 # The base branch against which stacks are created and PRs are targeted.
 # You can change this to 'main', 'master', or your project's default branch.
-BASE_BRANCH="main"
+BASE_BRANCH="dev"
 
 # --- GitHub Configuration ---
 # IMPORTANT: You must change these to your own GitHub username/org and repo name.
-GH_USER="weakky"
-GH_REPO="stack-branch-test"
+GH_USER="your-github-username"
+GH_REPO="your-repo-name"
 
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
@@ -315,33 +315,39 @@ cmd_rebase() {
     local original_branch
     original_branch=$(get_current_branch)
     echo "Current branch is '$original_branch'."
-    
-    local top_branch
-    top_branch=$(get_stack_top)
-    local bottom_branch
-    bottom_branch=$(get_stack_bottom)
-    
-    if [[ "$top_branch" == "$bottom_branch" && -z "$(get_parent_branch "$top_branch")" ]]; then
-        echo "Error: '$original_branch' is not part of a known stack."
-        echo "Rebasing onto '$BASE_BRANCH' directly."
+
+    # Get the full stack in order from bottom to top
+    local stack_branches=()
+    local current_branch
+    current_branch=$(get_stack_top)
+    while [[ -n "$current_branch" && "$current_branch" != "$BASE_BRANCH" ]]; do
+        stack_branches=("$current_branch" "${stack_branches[@]}") # Prepend to get bottom-to-top
+        current_branch=$(get_parent_branch "$current_branch")
+    done
+
+    if [ ${#stack_branches[@]} -eq 0 ]; then
+        echo "Error: Could not determine stack. Rebasing current branch onto '$BASE_BRANCH'."
         git rebase "origin/$BASE_BRANCH"
         return
     fi
     
-    echo "Detected stack from '$bottom_branch' to '$top_branch'."
+    echo "Detected stack: ${stack_branches[*]}"
     echo "Rebasing the entire stack onto the latest '$BASE_BRANCH'..."
 
     git fetch origin "$BASE_BRANCH"
 
-    echo "Temporarily checking out '$top_branch' to perform rebase..."
-    git checkout "$top_branch"
-
-    git rebase "origin/$BASE_BRANCH" --update-refs
+    local new_base="origin/$BASE_BRANCH"
+    for branch in "${stack_branches[@]}"; do
+        echo "--- Rebasing '$branch' onto '$new_base' ---"
+        git checkout "$branch" >/dev/null 2>&1
+        git rebase "$new_base"
+        new_base="$branch" # The next branch will be rebased on top of this one
+    done
 
     echo "Stack rebased successfully!"
     
     echo "Returning to original branch '$original_branch'."
-    git checkout "$original_branch"
+    git checkout "$original_branch" >/dev/null 2>&1
     
     echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
 }
