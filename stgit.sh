@@ -248,10 +248,11 @@ cmd_rebase() {
     git rebase "origin/$BASE_BRANCH" --update-refs
 
     echo "Stack rebased successfully!"
-    echo "The following branches were updated:"
+    # echo "The following branches were updated:"
     # A simple way to show the stack is to list branches with the same prefix.
     # A more robust method would traverse the parent chain again.
-    git branch --list "$(dirname "$top_branch")/*"
+    # TODO: Implement a more robust listing of the stack branches.
+    # git branch --list "$(dirname "$top_branch")/*"
     
     echo "Returning to original branch '$original_branch'."
     git checkout "$original_branch"
