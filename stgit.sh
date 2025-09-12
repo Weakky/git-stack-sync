@@ -14,6 +14,9 @@ BASE_BRANCH="main"
 GH_USER="weakky"
 GH_REPO="stack-branch-test"
 
+# --- Internal State ---
+STATE_FILE=".git/STGIT_OPERATION_STATE"
+
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
     echo "Error: The GitHub CLI ('gh') is not installed."
@@ -139,6 +142,85 @@ gh_api_call() {
         -H "Accept: application/vnd.github.v3+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "${fields[@]}"
+}
+
+# Internal function to perform the core rebase loop and handle conflicts.
+# This function is now responsible for saving the state of the operation.
+_perform_iterative_rebase() {
+    # State parameters
+    local command=$1
+    local original_branch=$2
+    local merged_branches_to_delete=$3
+    
+    # Rebase parameters
+    local new_base=$4
+    shift 4
+    local branches_to_rebase=("$@")
+
+    # Save the state BEFORE starting the potentially failing operation.
+    echo "COMMAND='$command'" > "$STATE_FILE"
+    echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
+    if [[ -n "$merged_branches_to_delete" ]]; then
+        echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
+    fi
+
+    for branch in "${branches_to_rebase[@]}"; do
+        echo "--- Rebasing '$branch' onto '$new_base' ---"
+        git checkout "$branch" >/dev/null 2>&1
+        if ! git rebase "$new_base"; then
+            echo "" >&2
+            echo "🛑 Rebase conflict detected." >&2
+            echo "1. Resolve the conflicts and run 'git add <files>'." >&2
+            echo "2. Run 'git rebase --continue'." >&2
+            echo "3. Once the entire git rebase is complete, run 'stgit continue' to finish the operation." >&2
+            exit 1
+        fi
+        new_base="$branch"
+    done
+}
+
+# Internal function to finalize an operation, called by successful commands AND by 'continue'.
+_finish_operation() {
+    if [ ! -f "$STATE_FILE" ]; then
+        # Should not happen if called correctly, but good for safety.
+        return
+    fi
+    
+    # Source the state file to get the context of the interrupted operation.
+    # shellcheck source=/dev/null
+    source "$STATE_FILE"
+
+    echo "Finishing up the previous stgit operation..."
+
+    # Perform command-specific cleanup logic.
+    if [[ "${COMMAND}" == "sync" && -n "${MERGED_BRANCHES_TO_DELETE}" ]]; then
+        for branch_to_delete in ${MERGED_BRANCHES_TO_DELETE}; do
+            read -p "Do you want to delete the local merged branch '$branch_to_delete'? (y/N) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                if [[ "$(get_current_branch)" == "$branch_to_delete" ]]; then
+                    git checkout "$BASE_BRANCH"
+                fi
+                git branch -D "$branch_to_delete"
+                echo "Deleted local branch '$branch_to_delete'."
+            fi
+        done
+    fi
+
+    # Return to original branch if it still exists
+    if git rev-parse --verify "$ORIGINAL_BRANCH" >/dev/null 2>&1; then
+        if [[ "$(get_current_branch)" != "$ORIGINAL_BRANCH" ]]; then
+            echo "Returning to original branch '$ORIGINAL_BRANCH'."
+            git checkout "$ORIGINAL_BRANCH" >/dev/null 2>&1
+        fi
+    else
+      echo "Original branch '$ORIGINAL_BRANCH' no longer exists. Returning to '$BASE_BRANCH'."
+      git checkout "$BASE_BRANCH" >/dev/null 2>&1
+    fi
+
+    rm -f "$STATE_FILE"
+    echo "Operation complete. Local branches have been updated."
+    echo "Run 'stgit push' to push them to the remote."
 }
 
 
@@ -360,26 +442,13 @@ cmd_rebase() {
     
     echo "Detected stack: ${stack_branches[*]}"
     echo "Rebasing the entire stack onto the latest '$BASE_BRANCH'..."
-
+    
     git fetch origin "$BASE_BRANCH" --quiet
 
-    local new_base="origin/$BASE_BRANCH"
-    for branch in "${stack_branches[@]}"; do
-        echo "--- Rebasing '$branch' onto '$new_base' ---"
-        git checkout "$branch" >/dev/null 2>&1
-        git rebase "$new_base"
-        new_base="$branch" # The next branch will be rebased on top of this one
-    done
-
+    _perform_iterative_rebase "rebase" "$original_branch" "" "origin/$BASE_BRANCH" "${stack_branches[@]}"
+    
     echo "Stack rebased successfully!"
-    
-    # Return to original branch if it still exists
-    if git rev-parse --verify "$original_branch" >/dev/null 2>&1; then
-      echo "Returning to original branch '$original_branch'."
-      git checkout "$original_branch" >/dev/null 2>&1
-    fi
-    
-    echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
+    _finish_operation
 }
 
 # Command: stgit restack
@@ -406,21 +475,29 @@ cmd_restack() {
     echo "Detected subsequent stack: ${branches_to_restack[*]}"
     echo "Restacking branches above '$original_branch'..."
 
-    local new_base="$original_branch"
-    for branch in "${branches_to_restack[@]}"; do
-        echo "--- Rebasing '$branch' onto '$new_base' ---"
-        git checkout "$branch" >/dev/null 2>&1
-        git rebase "$new_base"
-        new_base="$branch"
-    done
-
-    echo "Stack successfully restacked on top of '$original_branch'."
-
-    echo "Returning to original branch '$original_branch'."
-    git checkout "$original_branch" >/dev/null 2>&1
+    _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "${branches_to_restack[@]}"
     
-    echo "Local branches have been updated. Run 'stgit push' to push them to the remote."
+    echo "Stack successfully restacked on top of '$original_branch'."
+    _finish_operation
 }
+
+# Command: stgit continue
+cmd_continue() {
+    # Check if a git rebase is still in progress
+    if [ -d ".git/rebase-merge" ] || [ -d ".git/rebase-apply" ]; then
+        echo "A git rebase is still in progress." >&2
+        echo "Please resolve conflicts and run 'git rebase --continue' until it is complete." >&2
+        exit 1
+    fi
+    
+    if [ ! -f "$STATE_FILE" ]; then
+        echo "No stgit operation to continue. Nothing to do."
+        return
+    fi
+
+    _finish_operation
+}
+
 
 # Command: stgit sync
 cmd_sync() {
@@ -462,7 +539,6 @@ cmd_sync() {
         if [[ -n "$pr_number" ]]; then
             echo "Checking status of PR #${pr_number} for branch '$parent'..."
             local pr_state
-            # Query PR state, handle potential errors if PR doesn't exist (e.g., deleted after merge)
             pr_state=$(gh pr view "$pr_number" --json state --jq .state 2>/dev/null || echo "NOT_FOUND")
 
             if [[ "$pr_state" == "MERGED" ]]; then
@@ -470,7 +546,6 @@ cmd_sync() {
             fi
         fi
         
-        # Fallback for branches without a tracked PR number or if API fails
         if [[ "$is_merged" == false ]]; then
             if git merge-base --is-ancestor "$parent" "origin/$BASE_BRANCH"; then
                 echo "Parent branch '$parent' appears merged based on local commit history."
@@ -490,71 +565,45 @@ cmd_sync() {
             echo "Updating parent of '$branch' to '$grandparent'."
             set_parent_branch "$branch" "$grandparent"
             
-            # Add to a list to delete later, avoid modifying branch list while iterating
             merged_branches_to_delete+=("$parent")
         fi
     done
 
+    # Get the final list of remaining and merged branches for the operation.
+    local remaining_branches=()
+    for branch in "${stack_branches[@]}"; do
+        if [[ ! " ${merged_branches_to_delete[*]} " =~ " ${branch} " ]]; then
+            remaining_branches+=("$branch")
+        fi
+    done
+    local unique_merged_branches
+    unique_merged_branches=$(echo "${merged_branches_to_delete[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+
     if [ "$stack_was_modified" = true ]; then
         echo "Stack structure updated. Performing a full rebase to apply changes..."
-
-        # Find the new bottom of the stack to start the rebase from a valid branch
-        local new_bottom_branch=""
-        for branch in "${stack_branches[@]}"; do
-            # Check if this branch was NOT one of the merged ones.
-            # The spaces around the variables are important for exact matching.
-            if [[ ! " ${merged_branches_to_delete[*]} " =~ " ${branch} " ]]; then
-                new_bottom_branch="$branch"
-                break
-            fi
-        done
-
-        if [[ -n "$new_bottom_branch" ]]; then
+        
+        if [ ${#remaining_branches[@]} -gt 0 ]; then
+            local new_bottom_branch="${remaining_branches[0]}"
             echo "Starting rebase from the new bottom of the stack: '$new_bottom_branch'."
             git checkout "$new_bottom_branch" >/dev/null 2>&1
-            cmd_rebase
+            
+            local new_base
+            new_base=$(get_parent_branch "$new_bottom_branch")
+            if [[ -z "$new_base" ]]; then new_base="origin/$BASE_BRANCH"; fi
+            
+            _perform_iterative_rebase "sync" "$original_branch" "$unique_merged_branches" "$new_base" "${remaining_branches[@]}"
+            
+            echo "Stack rebased successfully!"
+            _finish_operation
+
         else
             echo "All branches in the stack were merged. Nothing left to rebase."
         fi
-
-        # Clean up the old, merged branches
-        # Use sort -u to only ask for each branch once
-        local unique_merged_branches
-        unique_merged_branches=$(echo "${merged_branches_to_delete[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-        
-        for branch_to_delete in $unique_merged_branches; do
-            read -p "Do you want to delete the local merged branch '$branch_to_delete'? (y/N) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                # Need to make sure we are not on the branch we are deleting
-                if [[ "$(get_current_branch)" == "$branch_to_delete" ]]; then
-                    # switch to a safe branch before deleting
-                    git checkout "$BASE_BRANCH"
-                fi
-                git branch -D "$branch_to_delete"
-                echo "Deleted local branch '$branch_to_delete'."
-            fi
-        done
-        
-        # Finally, return to the original branch if it still exists and we're not on it
-        if git rev-parse --verify "$original_branch" >/dev/null 2>&1; then
-            # The original branch might have been the one we just deleted
-            if [[ ! " ${unique_merged_branches[*]} " =~ " ${original_branch} " ]]; then
-                 if [[ "$(get_current_branch)" != "$original_branch" ]]; then
-                    echo "Returning to original branch '$original_branch'."
-                    git checkout "$original_branch"
-                 fi
-            fi
-        fi
-
     else
         echo "No merged branches found in the stack. Everything is up to date."
-        # Even if no parents were merged, it's good practice to sync with the base branch
         echo "Syncing with latest '$BASE_BRANCH' changes..."
         cmd_rebase
     fi
-
-    echo "Sync complete. Run 'stgit push' to push any updated branches to the remote."
 }
 
 
@@ -628,6 +677,7 @@ cmd_help() {
     echo "  restack                Update branches above the current one after making changes."
     echo "  push                   Force-push all branches in the current stack to the remote."
     echo "  pr                     Open the GitHub PR for the current branch in your browser."
+    echo "  continue               Resume and finalize an stgit operation after a rebase conflict."
     echo "  help                   Show this help message."
     echo ""
 }
@@ -661,6 +711,9 @@ main() {
             ;;
         restack)
             cmd_restack "$@"
+            ;;
+        continue)
+            cmd_continue "$@"
             ;;
         push)
             cmd_push "$@"
