@@ -49,6 +49,20 @@ get_parent_branch() {
     git config --get "branch.${branch_name}.parent" || echo ""
 }
 
+# Helper function to get the child of a given branch in the stack.
+get_child_branch() {
+    local parent_branch=$1
+    for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
+        local parent
+        parent=$(get_parent_branch "$branch")
+        if [[ "$parent" == "$parent_branch" ]]; then
+            echo "$branch"
+            return
+        fi
+    done
+    echo "" # No child found
+}
+
 # Helper function to set the parent of a given branch.
 set_parent_branch() {
     local child_branch=$1
@@ -98,17 +112,7 @@ get_stack_top() {
     
     # Keep searching upwards for a child until we can't find one.
     while true; do
-      found_child=""
-      # Iterate through all local branches to find one that has current_top as its parent.
-      for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
-        local parent
-        parent=$(get_parent_branch "$branch")
-        if [[ "$parent" == "$current_top" ]]; then
-          found_child="$branch"
-          break # Found the child, move up
-        fi
-      done
-      
+      found_child=$(get_child_branch "$current_top")
       if [[ -n "$found_child" ]]; then
         current_top="$found_child"
       else
@@ -171,38 +175,40 @@ cmd_insert() {
     local parent_branch
     parent_branch=$(get_current_branch)
 
-    # Find the branch that is currently the child of our position.
-    local original_child=""
-    for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
-        local parent
-        parent=$(get_parent_branch "$branch")
-        if [[ "$parent" == "$parent_branch" ]]; then
-            original_child="$branch"
-            break
-        fi
-    done
+    local original_child
+    original_child=$(get_child_branch "$parent_branch")
 
     # Create the new branch and set its parent.
     git checkout -b "$new_branch"
     set_parent_branch "$new_branch" "$parent_branch"
     echo "Created branch '$new_branch' on top of '$parent_branch'."
 
-    # If there was a child, rebase it and update its PR.
+    # If there was a child, we need to rebase it and its children onto the new branch.
     if [[ -n "$original_child" ]]; then
-        echo "Found subsequent branch '$original_child'. Rebasing it onto '$new_branch'..."
+        echo "Found subsequent branch '$original_child'. Rebasing it and its descendants onto '$new_branch'..."
         
-        git checkout "$original_child" >/dev/null 2>&1
-        local top_of_substack
-        top_of_substack=$(get_stack_top)
-        echo "Rebasing stack from '$original_child' to '$top_of_substack'..."
-        
-        git checkout "$top_of_substack" >/dev/null 2>&1
-        git rebase "$new_branch" --update-refs
-        
+        # Get the full sub-stack starting from original_child
+        local sub_stack=()
+        local current_sub_branch="$original_child"
+        while [[ -n "$current_sub_branch" ]]; do
+            sub_stack+=("$current_sub_branch")
+            current_sub_branch=$(get_child_branch "$current_sub_branch")
+        done
+
+        # Iteratively rebase the sub-stack
+        local new_base="$new_branch"
+        for branch in "${sub_stack[@]}"; do
+            echo "--- Rebasing '$branch' onto '$new_base' ---"
+            git checkout "$branch" >/dev/null 2>&1
+            git rebase "$new_base"
+            new_base="$branch"
+        done
+
+        # Update the parent of the first child
         set_parent_branch "$original_child" "$new_branch"
         echo "Updated parent of '$original_child' to be '$new_branch'."
         
-        # --- GitHub Integration ---
+        # Update GitHub PR base
         local pr_number_to_update
         pr_number_to_update=$(get_pr_number "$original_child")
         if [[ -n "$pr_number_to_update" ]]; then
@@ -211,6 +217,7 @@ cmd_insert() {
             echo "GitHub PR #${pr_number_to_update} updated."
         fi
         
+        # Checkout the new branch at the end for the user
         git checkout "$new_branch" >/dev/null 2>&1
     fi
 
@@ -221,20 +228,18 @@ cmd_insert() {
 cmd_submit() {
     check_gh_auth
     echo "Syncing stack with GitHub..."
-    local bottom_branch
-    bottom_branch=$(get_stack_bottom)
     
     local stack_branches=()
     local current_branch
     current_branch=$(get_stack_top)
 
-    # Collect all branches in the stack
+    # Collect all branches in the stack from top to bottom
     while [[ -n "$current_branch" && "$current_branch" != "$BASE_BRANCH" ]]; do
-        stack_branches=("${stack_branches[@]}" "$current_branch")
+        stack_branches+=("$current_branch")
         current_branch=$(get_parent_branch "$current_branch")
     done
     
-    # Iterate from bottom to top to create PRs in order
+    # Iterate from bottom to top (reverse order) to create PRs in order
     for (( i=${#stack_branches[@]}-1 ; i>=0 ; i-- )) ; do
         local branch_name="${stack_branches[i]}"
         local pr_number
@@ -281,18 +286,15 @@ cmd_submit() {
 cmd_next() {
     local current_branch
     current_branch=$(get_current_branch)
+    local child_branch
+    child_branch=$(get_child_branch "$current_branch")
     
-    for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
-      local parent
-      parent=$(get_parent_branch "$branch")
-      if [[ "$parent" == "$current_branch" ]]; then
-        git checkout "$branch"
-        echo "Checked out child branch: $branch"
-        return
-      fi
-    done
-
-    echo "No child branch found for '$current_branch'. You might be at the top of the stack."
+    if [[ -n "$child_branch" ]]; then
+        git checkout "$child_branch"
+        echo "Checked out child branch: $child_branch"
+    else
+        echo "No child branch found for '$current_branch'. You might be at the top of the stack."
+    fi
 }
 
 # Command: stgit prev
@@ -358,23 +360,31 @@ cmd_restack() {
     original_branch=$(get_current_branch)
     echo "Current branch is '$original_branch'."
 
-    local top_branch
-    top_branch=$(get_stack_top)
+    # Get the branches above the current one, in order from bottom to top.
+    local branches_to_restack=()
+    local current_child
+    current_child=$(get_child_branch "$original_branch")
 
-    if [[ "$original_branch" == "$top_branch" ]]; then
+    while [[ -n "$current_child" ]]; do
+        branches_to_restack+=("$current_child")
+        current_child=$(get_child_branch "$current_child") # Keep looking up the chain
+    done
+
+    if [ ${#branches_to_restack[@]} -eq 0 ]; then
         echo "You are at the top of the stack. Nothing to restack."
         return
     fi
     
+    echo "Detected subsequent stack: ${branches_to_restack[*]}"
     echo "Restacking branches above '$original_branch'..."
-    
-    # Temporarily check out the top branch to perform the rebase from there
-    echo "Temporarily checking out '$top_branch'..."
-    git checkout "$top_branch" >/dev/null 2>&1
 
-    # Rebase the top of the stack onto the current branch.
-    # --update-refs will handle all intermediate branches.
-    git rebase "$original_branch" --update-refs
+    local new_base="$original_branch"
+    for branch in "${branches_to_restack[@]}"; do
+        echo "--- Rebasing '$branch' onto '$new_base' ---"
+        git checkout "$branch" >/dev/null 2>&1
+        git rebase "$new_base"
+        new_base="$branch"
+    done
 
     echo "Stack successfully restacked on top of '$original_branch'."
 
