@@ -175,6 +175,20 @@ _perform_iterative_rebase() {
             echo "3. Once the entire git rebase is complete, run 'stgit continue' to finish the operation." >&2
             exit 1
         fi
+        
+        # Check if the rebase resulted in an empty branch and warn the user.
+        local commit_count
+        commit_count=$(git rev-list --count "${new_base}".."${branch}")
+        if [[ "$commit_count" -eq 0 ]]; then
+            local pr_number_to_check
+            pr_number_to_check=$(get_pr_number "$branch")
+            echo "⚠️  WARNING: After rebasing, branch '$branch' contains no new changes compared to '$new_base'."
+            if [[ -n "$pr_number_to_check" ]]; then
+                echo "    This can happen if changes from this branch were also introduced into its parent."
+                echo "    Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
+            fi
+        fi
+
         new_base="$branch"
     done
 }
