@@ -100,6 +100,60 @@ cmd_create() {
     echo "Parent relationship stored in git config."
 }
 
+# Command: stgit insert <branch-name>
+cmd_insert() {
+    if [[ -z "$1" ]]; then
+        echo "Error: Branch name is required."
+        echo "Usage: stgit insert <branch-name>"
+        exit 1
+    fi
+
+    local new_branch=$1
+    local parent_branch
+    parent_branch=$(get_current_branch)
+
+    # Find the branch that is currently the child of our position.
+    local original_child=""
+    for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
+        local parent
+        parent=$(get_parent_branch "$branch")
+        if [[ "$parent" == "$parent_branch" ]]; then
+            original_child="$branch"
+            break
+        fi
+    done
+
+    # Create the new branch and set its parent.
+    git checkout -b "$new_branch"
+    set_parent_branch "$new_branch" "$parent_branch"
+    echo "Created branch '$new_branch' on top of '$parent_branch'."
+
+    # If there was a child, rebase it and its descendants.
+    if [[ -n "$original_child" ]]; then
+        echo "Found subsequent branch '$original_child'. Rebasing it onto '$new_branch'..."
+        
+        # To find the top of the stack that needs rebasing, we check out the
+        # original child and then use get_stack_top.
+        git checkout "$original_child" >/dev/null 2>&1
+        local top_of_substack
+        top_of_substack=$(get_stack_top)
+        echo "Rebasing stack from '$original_child' to '$top_of_substack'..."
+        
+        # Checkout the top of that substack and rebase it all onto our new branch.
+        git checkout "$top_of_substack" >/dev/null 2>&1
+        git rebase "$new_branch" --update-refs
+        
+        # Crucially, update the parent pointer of the original child.
+        set_parent_branch "$original_child" "$new_branch"
+        echo "Updated parent of '$original_child' to be '$new_branch'."
+        
+        # Go back to the new branch to leave the user in a good state.
+        git checkout "$new_branch" >/dev/null 2>&1
+    fi
+
+    echo "Successfully inserted '$new_branch' into the stack."
+}
+
 # Command: stgit submit
 # In a real tool, this would create a PR on GitHub/GitLab.
 # Here, we'll just show what PRs would be created.
@@ -214,6 +268,7 @@ cmd_help() {
     echo ""
     echo "Commands:"
     echo "  create <branch-name>   Create a new branch on top of the current one."
+    echo "  insert <branch-name>   Create and insert a new branch at the current position."
     echo "  submit                 Simulate submitting the current stack of branches as PRs."
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
@@ -231,6 +286,9 @@ main() {
     case "$cmd" in
         create)
             cmd_create "$@"
+            ;;
+        insert)
+            cmd_insert "$@"
             ;;
         submit)
             cmd_submit "$@"
