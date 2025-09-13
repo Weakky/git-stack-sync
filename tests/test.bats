@@ -537,15 +537,22 @@ teardown() {
     # warn the user about this and continue to rebase subsequent branches correctly.
     
     # Setup
-    create_stack feature-a feature-b feature-c
-    # On feature-b, create file-b.txt
+    # 1. Create the stack structure without initial commits from the helper.
+    run "$STGIT_CMD" create feature-a
+    run "$STGIT_CMD" create feature-b
+    run "$STGIT_CMD" create feature-c
     run git checkout feature-b
+
+    # 2. Create the specific commit on feature-b that will be made redundant.
     run create_commit "add file-b" "content" "file-b.txt"
-    # Now, go back to feature-a and amend it to include the *same* change.
+
+    # 3. Create a normal commit on feature-c.
+    run git checkout feature-c
+    run create_commit "add file-c" "content" "file-c.txt"
+    
+    # 4. Go back to feature-a and add a commit with the *exact same changes* as feature-b.
     run git checkout feature-a
-    run create_commit "add file-b" "content" "file-b.txt"
-    run git add .
-    run git commit --amend --no-edit
+    run create_commit "add file-b on parent" "content" "file-b.txt"
     local new_a_sha; new_a_sha=$(git rev-parse HEAD)
 
     # Action
