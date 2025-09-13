@@ -6,6 +6,7 @@ set -e
 
 # --- Internal State ---
 STATE_FILE=".git/STGIT_OPERATION_STATE"
+CONFIG_CACHE_FILE=".git/STGIT_CONFIG_CACHE"
 
 # --- Logging Helpers ---
 log_success() {
@@ -49,12 +50,22 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # --- Auto-Configuration ---
-# These variables are now determined automatically.
+# These variables are now determined automatically and cached.
 BASE_BRANCH=""
 GH_USER=""
 GH_REPO=""
 
 _initialize_config() {
+    # Try to load from cache first.
+    if [[ -f "$CONFIG_CACHE_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$CONFIG_CACHE_FILE"
+        if [[ -n "$BASE_BRANCH" && -n "$GH_USER" && -n "$GH_REPO" ]]; then
+            return 0 # Successfully loaded from cache
+        fi
+    fi
+    
+    log_step "Initializing configuration (first run or cache is invalid)..."
     local repo_info
     # Attempt to get repo info from the GitHub CLI.
     # The '2>/dev/null' suppresses gh's errors so we can provide our own.
@@ -75,6 +86,12 @@ _initialize_config() {
         log_info "Please check your 'gh' CLI authentication and repository configuration."
         exit 1
     fi
+
+    # Write to cache file for next time
+    echo "BASE_BRANCH='$BASE_BRANCH'" > "$CONFIG_CACHE_FILE"
+    echo "GH_USER='$GH_USER'" >> "$CONFIG_CACHE_FILE"
+    echo "GH_REPO='$GH_REPO'" >> "$CONFIG_CACHE_FILE"
+    log_success "Configuration cached for future runs."
 }
 
 
@@ -1056,4 +1073,3 @@ main() {
 }
 
 main "$@"
-
