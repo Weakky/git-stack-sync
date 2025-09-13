@@ -113,15 +113,6 @@ assert_branch_has_no_pr_number() {
     assert_failure
 }
 
-# Asserts that a given commit SHA is an ancestor of the current HEAD of a branch.
-assert_commit_is_ancestor() {
-    local ancestor_sha=$1
-    local branch_name=$2
-    # This git command returns a zero exit code if it's an ancestor, non-zero otherwise.
-    run git merge-base --is-ancestor "$ancestor_sha" "$branch_name"
-    assert_success
-}
-
 # Asserts that a local branch exists.
 # Usage: assert_branch_exists <branch_name>
 assert_branch_exists() {
