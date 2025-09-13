@@ -9,32 +9,36 @@ create_temp_dir() {
 setup_git_repo() {
     # Use BATS_TEST_TMPDIR, a unique directory created by Bats for each test.
     # This guarantees perfect isolation and is automatically cleaned up.
-    cd "$BATS_TEST_TMPDIR"
+    local test_dir="$BATS_TEST_TMPDIR"
+    
+    # 1. Initialize a standard local repository first.
+    git init -b main "$test_dir/local" >/dev/null 2>&1
+    
+    # 2. Navigate into the local repository.
+    cd "$test_dir/local"
 
-    # Initialize the local repository
-    git init -b main >/dev/null 2>&1
+    # 3. Configure the repository for testing.
     git config user.email "test@example.com"
     git config user.name "Test User"
     git config --local credential.helper "" # Disable credential helpers
 
-    # Create the first commit so HEAD is valid.
+    # 4. Create the first commit so HEAD is valid *before* any other operations.
     create_commit "Initial commit"
 
-    # Set up the bare remote repository in the same test-specific temp dir
-    git init --bare remote.git >/dev/null 2>&1
-    
-    # Link the local and remote and push the initial state
-    git remote add origin remote.git >/dev/null 2>&1
+    # 5. Now that a commit exists, set up the remote.
+    git init --bare "$test_dir/remote.git" >/dev/null 2>&1
+    git remote add origin "$test_dir/remote.git" >/dev/null 2>&1
     git push -u origin main >/dev/null 2>&1
 }
 
 # Creates a new commit with a given message.
+# Can optionally take a content and filename argument.
 create_commit() {
     local message=$1
-    # Use the message to create a unique filename to avoid conflicts
-    local filename
-    filename=$(echo "$message" | tr -s ' ' '_').txt
-    echo "$message" > "$filename"
+    local content=${2:-$message}
+    local filename=${3:-$(echo "$message" | tr -s ' ' '_').txt}
+    
+    echo "$content" > "$filename"
     git add .
     git commit -m "$message" >/dev/null
 }
@@ -67,3 +71,4 @@ create_stack() {
     # Checkout the last branch created
     git checkout "$parent" >/dev/null
 }
+
