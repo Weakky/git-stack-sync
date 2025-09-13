@@ -783,8 +783,9 @@ teardown() {
     # Setup
     create_stack feature-a
     
-    # Action: Pipe 'n' to the confirmation prompt.
-    run echo "n" | "$STGIT_CMD" push
+    # Action: Use a here-string to provide 'n' to the confirmation prompt.
+    # This is more robust than using a pipe with echo.
+    run "$STGIT_CMD" push <<< "n"
     
     # Assertions
     assert_success
