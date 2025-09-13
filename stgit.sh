@@ -596,9 +596,9 @@ cmd_squash() {
     echo "   Stack Before:"
     for branch in "${stack_before[@]}"; do
         if [[ "$branch" == "$branch_to_squash" ]]; then
-            log_info "     - ${C_RED}${branch}${C_RESET}  <-- to be squashed and deleted"
+            echo -e "     - ${C_RED}${branch}${C_RESET}  <-- to be squashed and deleted"
         else
-            log_info "     - $branch"
+            echo "     - $branch"
         fi
     done
 
@@ -607,9 +607,9 @@ cmd_squash() {
         if [[ "$branch" == "$branch_to_squash" ]]; then
             continue # Skip the deleted branch
         elif [[ "$branch" == "$target_branch" ]]; then
-            log_info "     - ${C_YELLOW}${branch}${C_RESET} <-- will contain commits from '$branch_to_squash'"
+            echo -e "     - ${C_YELLOW}${branch}${C_RESET} <-- will contain commits from '$branch_to_squash'"
         else
-            log_info "     - $branch"
+            echo "     - $branch"
         fi
     done
     echo ""
@@ -1275,30 +1275,38 @@ cmd_help() {
     echo "  -y, --yes              Automatically answer 'yes' to all prompts."
     echo "  -h, --help             Show this help message."
     echo ""
-    echo "Commands:"
-    echo "  amend                  Amend staged changes to the last commit and restack."
-    echo "  clean                  Remove all stgit metadata from the repository."
+    echo "Stack & Branch Management:"
     echo "  create <branch-name>   Create a new branch on top of the current one."
-    echo "  delete                 Delete the current branch and repair the stack."
+    echo "  track <set|remove> [args]"
+    echo "                         Manage stack metadata. 'set' assigns a parent, 'remove' untracks a branch."
     echo "  insert [--before] <branch-name>"
     echo "                         Insert a new branch. By default, inserts after the"
     echo "                         current branch. Use --before to insert before it."
-    echo "  list|ls                List all available stacks."
     echo "  squash [--into parent|child]"
     echo "                         Squash stacked branches together. Defaults to squashing"
     echo "                         the current branch into its parent."
-    echo "  submit                 Create GitHub PRs for all branches in the stack."
+    echo "  delete                 Delete the current branch and repair the stack."
+    echo ""
+    echo "History & Synchronization:"
+    echo "  amend                  Amend staged changes to the last commit and restack."
+    echo "  restack                Update branches above the current one after making changes."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
+    echo "  push                   Force-push all branches in the current stack to the remote."
+    echo "  continue               Resume and finalize an stgit operation after a rebase conflict."
+    echo ""
+    echo "Inspection & Navigation:"
     echo "  status                 Display the status of the current branch stack."
-    echo "  track <set|remove> [args]"
-    echo "                         Manage stack metadata. 'set' assigns a parent, 'remove' untracks a branch."
+    echo "  list|ls                List all available stacks."
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
-    echo "  restack                Update branches above the current one after making changes."
-    echo "  push                   Force-push all branches in the current stack to the remote."
+    echo ""
+    echo "GitHub Integration:"
+    echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  pr                     Open the GitHub PR for the current branch in your browser."
-    echo "  continue               Resume and finalize an stgit operation after a rebase conflict."
+    echo ""
+    echo "Housekeeping:"
+    echo "  clean                  Remove all stgit metadata from the repository."
     echo "  help                   Show this help message."
     echo ""
 }
@@ -1371,4 +1379,3 @@ main() {
 }
 
 main "$@"
-
