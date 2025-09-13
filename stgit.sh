@@ -638,6 +638,28 @@ cmd_squash() {
     fi
     
     # --- Cleanup and Metadata Repair ---
+    local pr_number_to_close
+    pr_number_to_close=$(get_pr_number "$branch_to_squash")
+    if [[ -n "$pr_number_to_close" ]]; then
+        local close_pr=false
+        if [[ "$AUTO_CONFIRM" == true ]]; then
+            close_pr=true
+        else
+            log_prompt "Do you want to close the associated GitHub PR #${pr_number_to_close} for the deleted branch '$branch_to_squash'?"
+            read -p "(y/N) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                close_pr=true
+            fi
+        fi
+
+        if [[ "$close_pr" == true ]]; then
+            log_step "Closing PR #${pr_number_to_close} on GitHub..."
+            gh pr close "$pr_number_to_close"
+            log_success "PR #${pr_number_to_close} closed."
+        fi
+    fi
+
     git branch -D "$branch_to_squash"
     if [[ -n "$grand_child" ]]; then
         set_parent_branch "$grand_child" "$target_branch"
@@ -647,6 +669,8 @@ cmd_squash() {
     
     if [[ -n "$grand_child" ]]; then
         log_suggestion "Run 'stgit restack' to update descendant branches."
+    else
+        log_suggestion "Run 'stgit push' to update the remote with your changes."
     fi
 }
 
@@ -1379,3 +1403,4 @@ main() {
 }
 
 main "$@"
+
