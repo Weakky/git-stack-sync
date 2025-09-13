@@ -34,6 +34,11 @@ setup() {
     setup_git_repo
 }
 
+teardown() {
+    # Clean up mock state after each test
+    cleanup_mock_gh_state
+}
+
 # --- Tests for 'stgit create' ---
 @test "create: creates a new child branch" {
     run "$STGIT_CMD" create feature-a
@@ -83,5 +88,111 @@ setup() {
     assert_failure
     assert_output --partial "Found 1 stack(s):"
     assert_output --partial "- feature-a (2 branches)"
+}
+
+# --- Tests for 'stgit sync' ---
+@test "sync: simple sync with no merged branches" {
+    # Setup
+    create_stack feature-a feature-b
+    git checkout main
+    create_commit "New commit on main"
+    git push origin main >/dev/null
+    git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" sync
+    
+    # Assertions
+    assert_success
+    assert_output --partial "Rebasing 'feature-a' onto 'origin/main'"
+    assert_output --partial "Rebasing 'feature-b' onto 'feature-a'"
+    assert_output --partial "Run 'stgit push' to update your remote branches"
+
+    # Verify the commit is now in the history of feature-b
+    run git log --oneline feature-b
+    assert_output --partial "New commit on main"
+}
+
+@test "sync: syncs with a merged parent branch" {
+    # Setup
+    create_stack feature-a feature-b
+    # Mock PRs: #10 for feature-a, #11 for feature-b
+    git config branch.feature-a.pr-number 10
+    git config branch.feature-b.pr-number 11
+    mock_pr_state 10 MERGED # Mock feature-a's PR as merged
+    git checkout feature-b
+
+    # Action: Run sync and answer 'y' to the delete prompt
+    run echo "y" | "$STGIT_CMD" sync
+
+    # Assertions
+    assert_success
+    assert_output --partial "Parent branch 'feature-a' has been merged"
+    assert_output --partial "Updating parent of 'feature-b' to 'main'"
+    assert_output --partial "Rebasing 'feature-b' onto 'origin/main'"
+    assert_output --partial "Deleted local branch 'feature-a'"
+
+    # Verify new stack structure
+    run "$STGIT_CMD" status
+    assert_output --partial "➡️  feature-b * (parent: main)"
+    refute_output --partial "feature-a"
+}
+
+@test "sync: handles rebase conflict gracefully" {
+    # Setup
+    create_commit "conflict-file" "line 1" "file.txt"
+    "$STGIT_CMD" create feature-a >/dev/null
+    create_commit "feature-a changes" "line 2" "file.txt"
+    git checkout main >/dev/null
+    create_commit "main changes" "line one" "file.txt"
+    git push origin main >/dev/null
+    git checkout feature-a >/dev/null
+
+    # Action
+    run "$STGIT_CMD" sync
+
+    # Assertions
+    assert_failure
+    assert_output --partial "Rebase conflict detected"
+    assert_output --partial "run 'stgit continue'"
+    
+    # Verify state file was created
+    assert [ -f ".git/STGIT_OPERATION_STATE" ]
+    run cat ".git/STGIT_OPERATION_STATE"
+    assert_output --partial "COMMAND='sync'"
+    assert_output --partial "ORIGINAL_BRANCH='feature-a'"
+}
+
+@test "sync: 'continue' resumes after a sync conflict" {
+    # Setup: Create a conflict
+    create_commit "conflict-file" "line 1" "file.txt"
+    "$STGIT_CMD" create feature-a >/dev/null
+    create_commit "feature-a changes" "line 2" "file.txt"
+    git checkout main >/dev/null
+    create_commit "main changes" "line one" "file.txt"
+    git push origin main >/dev/null
+    git checkout feature-a >/dev/null
+    # Run sync, which is expected to fail
+    run -1 "$STGIT_CMD" sync
+
+    # Manual conflict resolution
+    echo "resolved" > file.txt
+    git add file.txt
+    git rebase --continue >/dev/null
+
+    # Action
+    run "$STGIT_CMD" continue
+
+    # Assertions
+    assert_success
+    assert_output --partial "Finishing operation..."
+    assert_output --partial "Run 'stgit push' to update your remote branches"
+    
+    # Verify state file was removed
+    refute [ -f ".git/STGIT_OPERATION_STATE" ]
+    
+    # Verify we are back on the original branch
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-a"
 }
 

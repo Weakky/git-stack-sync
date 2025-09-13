@@ -39,3 +39,31 @@ create_commit() {
     git commit -m "$message" >/dev/null
 }
 
+# Sets up a mock PR response for the 'gh' mock.
+# Usage: mock_pr_state <pr_number> <state: OPEN|MERGED|CLOSED>
+mock_pr_state() {
+    local pr_number=$1
+    local state=$2
+    local mock_state_dir="/tmp/stgit_mock_gh_state"
+    mkdir -p "$mock_state_dir"
+    echo "$state" > "$mock_state_dir/pr_${pr_number}_state"
+}
+
+# Cleans up any state files created by the mock gh CLI.
+cleanup_mock_gh_state() {
+    rm -rf /tmp/stgit_mock_gh_state
+}
+
+# Creates a stack of branches for testing.
+# Usage: create_stack branch1 branch2 branch3 ...
+create_stack() {
+    local parent="main"
+    for branch_name in "$@"; do
+        git checkout "$parent" >/dev/null
+        "$STGIT_CMD" create "$branch_name" >/dev/null
+        create_commit "Commit for $branch_name"
+        parent="$branch_name"
+    done
+    # Checkout the last branch created
+    git checkout "$parent" >/dev/null
+}
