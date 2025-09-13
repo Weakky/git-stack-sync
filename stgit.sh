@@ -534,42 +534,100 @@ cmd_amend() {
 
 cmd_squash() {
     _guard_context "squash"
+    
+    local direction="parent" # Default direction
+    if [[ "$1" == "--into" ]]; then
+        direction="$2"
+        shift 2
+    fi
+
+    if [[ -n $(git status --porcelain) ]]; then
+        log_error "Cannot squash with uncommitted changes in the working directory."
+        exit 1
+    fi
+
     local current_branch
     current_branch=$(get_current_branch)
-
-    local parent
-    parent=$(get_parent_branch "$current_branch")
-    if [[ -z "$parent" ]]; then
-        log_error "Cannot determine parent of '$current_branch'. Is it part of a stack?"
-        exit 1
-    fi
-
-    local commit_count
-    commit_count=$(git rev-list --count "$parent..$current_branch")
-    if [[ "$commit_count" -le 1 ]]; then
-        log_warning "Branch '$current_branch' has only one commit. Nothing to squash."
-        exit 0
-    fi
-
-    log_step "Starting interactive rebase to squash commits on '$current_branch'..."
-    log_info "Your editor will now open. To squash commits, change 'pick' to 's' or 'squash' for the commits you wish to merge into the one above it."
+    local parent_branch
+    parent_branch=$(get_parent_branch "$current_branch")
+    local child_branch
+    child_branch=$(get_child_branch "$current_branch")
+    local grand_child
     
-    # This is an interactive command, the script will pause here.
-    if git rebase -i "$parent"; then
-        log_success "Commits squashed successfully."
-        # Now, restack any children
-        local child_branch
-        child_branch=$(get_child_branch "$current_branch")
-        if [[ -n "$child_branch" ]]; then
-            cmd_restack
-        else
-            log_suggestion "Run 'stgit push' to update the remote."
+    local target_branch=""
+    local branch_to_squash=""
+
+    if [[ "$direction" == "parent" ]]; then
+        if [[ "$parent_branch" == "$BASE_BRANCH" ]]; then
+            log_error "Cannot squash the first branch of a stack into '$BASE_BRANCH'."
+            exit 1
         fi
+        target_branch="$parent_branch"
+        branch_to_squash="$current_branch"
+        grand_child="$child_branch"
+    elif [[ "$direction" == "child" ]]; then
+        if [[ -z "$child_branch" ]]; then
+            log_error "No child branch found to squash into."
+            exit 1
+        fi
+        target_branch="$current_branch"
+        branch_to_squash="$child_branch"
+        grand_child=$(get_child_branch "$child_branch")
     else
-        log_error "Interactive rebase failed or was aborted."
+        log_error "Invalid direction for squash: '$direction'. Must be 'parent' or 'child'."
         exit 1
     fi
+
+    # --- Confirmation Prompt ---
+    echo ""
+    log_step "Squashing '$branch_to_squash' into '$target_branch'..."
+    echo "   Stack Before:"
+    # This is a simplified visualization. A real one might be more complex.
+    log_info "     - $parent_branch"
+    log_info "     - $current_branch"
+    log_info "     - $child_branch"
+    echo "   Stack After:"
+    if [[ "$direction" == "parent" ]]; then
+        log_info "     - $parent_branch (will contain commits from $current_branch)"
+        log_info "     - $child_branch"
+    else # child
+        log_info "     - $parent_branch"
+        log_info "     - $current_branch (will contain commits from $child_branch)"
+    fi
+    echo ""
+
+    if [[ "$AUTO_CONFIRM" != true ]]; then
+        log_prompt "Are you sure you want to continue?"
+        read -p "(y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_warning "Squash cancelled."
+            exit 0
+        fi
+    fi
+    
+    # --- Git Operations ---
+    git checkout "$target_branch" >/dev/null 2>&1
+    git merge --squash "$branch_to_squash"
+    
+    log_info "Please provide a commit message for the squashed changes."
+    # This will open the user's default editor.
+    if ! git commit; then
+        log_error "Commit failed or was aborted. Undoing squash."
+        git reset --hard HEAD >/dev/null 2>&1
+        git checkout "$current_branch" >/dev/null 2>&1
+        exit 1
+    fi
+    
+    # --- Cleanup and Metadata Repair ---
+    git branch -D "$branch_to_squash"
+    if [[ -n "$grand_child" ]]; then
+        set_parent_branch "$grand_child" "$target_branch"
+    fi
+
+    log_success "Successfully squashed '$branch_to_squash' into '$target_branch'."
 }
+
 
 cmd_clean() {
     log_warning "You are about to permanently delete all stgit metadata for this repository."
@@ -1204,7 +1262,9 @@ cmd_help() {
     echo "                         Insert a new branch. By default, inserts after the"
     echo "                         current branch. Use --before to insert before it."
     echo "  list|ls                List all available stacks."
-    echo "  squash                 Squash commits on the current branch and restack."
+    echo "  squash [--into parent|child]"
+    echo "                         Squash stacked branches together. Defaults to squashing"
+    echo "                         the current branch into its parent."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
@@ -1275,7 +1335,7 @@ main() {
         next) cmd_next "${cmd_args[@]}";;
         prev) cmd_prev "${cmd_args[@]}";;
         restack) cmd_restack "${cmd_args[@]}";;
-        continue) cmd_continue "${cmd_args[@]}";;
+        continue) cmd_continue "${cmd_gargs[@]}";;
         push) cmd_push "${cmd_args[@]}";;
         pr) cmd_pr "${cmd_args[@]}";;
         list|ls) cmd_list "${cmd_args[@]}";;
@@ -1289,4 +1349,3 @@ main() {
 }
 
 main "$@"
-
