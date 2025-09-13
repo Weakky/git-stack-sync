@@ -133,6 +133,19 @@ get_stack_bottom() {
     echo "$current_branch"
 }
 
+# Helper to find all stack bottom branches.
+get_all_stack_bottoms() {
+    local bottoms=()
+    for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
+        local parent
+        parent=$(get_parent_branch "$branch")
+        if [[ "$parent" == "$BASE_BRANCH" ]]; then
+            bottoms+=("$branch")
+        fi
+    done
+    echo "${bottoms[@]}"
+}
+
 # Helper to find the "top" of the current stack by traversing child relationships.
 get_stack_top() {
     local current_top
@@ -623,6 +636,28 @@ cmd_pr() {
 
 cmd_status() {
     check_gh_auth
+    local current_branch
+    current_branch=$(get_current_branch)
+
+    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+        log_error "You are on the base branch ('$BASE_BRANCH')."
+        log_info "The status command is context-aware and needs to be run from within a stack."
+        
+        local bottoms
+        bottoms=($(get_all_stack_bottoms))
+        
+        if [ ${#bottoms[@]} -gt 0 ]; then
+            log_suggestion "Found the following stacks. Checkout one of the branches to see its status:"
+            for bottom in "${bottoms[@]}"; do
+                log_info "- $bottom"
+            done
+        else
+            log_warning "No stgit stacks found."
+            log_suggestion "Run 'stgit create <branch-name>' to start a new stack."
+        fi
+        return
+    fi
+
     log_step "Gathering stack status..."
     git fetch origin --quiet
 
