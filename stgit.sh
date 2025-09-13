@@ -123,6 +123,10 @@ get_parent_branch() {
 get_child_branch() {
     local parent_branch=$1
     for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
+        # Skip the parent branch itself to avoid self-parenting issues in weird repo states
+        if [[ "$branch" == "$parent_branch" ]]; then
+            continue
+        fi
         local parent
         parent=$(get_parent_branch "$branch")
         if [[ "$parent" == "$parent_branch" ]]; then
@@ -179,16 +183,16 @@ get_stack_bottom() {
 get_all_stack_bottoms() {
     local bottoms=()
     for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
+        # Exclude the base branch itself
+        if [[ "$branch" == "$BASE_BRANCH" ]]; then
+            continue
+        fi
+
         local parent
         parent=$(get_parent_branch "$branch")
-        # A branch is the bottom of a STACK if its parent is the base branch,
-        # AND it has a child branch. This distinguishes a stack from a single feature branch.
+        # A branch is the bottom of a STACK if its parent is the base branch.
         if [[ "$parent" == "$BASE_BRANCH" ]]; then
-            local child
-            child=$(get_child_branch "$branch")
-            if [[ -n "$child" ]]; then
-                bottoms+=("$branch")
-            fi
+            bottoms+=("$branch")
         fi
     done
     echo "${bottoms[@]}"
@@ -375,13 +379,25 @@ _finish_operation() {
     log_suggestion "Run 'stgit push' to update your remote branches."
 }
 
-# A centralized guard for commands that should not be run on the base branch.
-_guard_on_base_branch() {
+# (New) A centralized guard for commands that require a tracked branch.
+_guard_context() {
     local command_name=$1
-    if [[ "$(get_current_branch)" == "$BASE_BRANCH" ]]; then
+    local current_branch
+    current_branch=$(get_current_branch)
+
+    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
         log_error "The '$command_name' command cannot be run from the base branch ('$BASE_BRANCH')."
-        log_info "It must be run from within a stack."
         cmd_list # Call the list command to provide context
+        exit 1
+    fi
+
+    local parent
+    parent=$(git config --get "branch.${current_branch}.parent" || echo "")
+    if [[ -z "$parent" ]]; then
+        log_error "The '$command_name' command requires a tracked branch."
+        log_info "Branch '$current_branch' is not currently tracked by stgit."
+        log_suggestion "To start a new stack, run 'stgit create <branch-name>'."
+        log_suggestion "To track an existing branch, run 'stgit track <parent-branch>'."
         exit 1
     fi
 }
@@ -389,8 +405,30 @@ _guard_on_base_branch() {
 
 # --- CLI Commands ---
 
+cmd_track() {
+    local current_branch
+    current_branch=$(get_current_branch)
+    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+        log_error "Cannot track the base branch ('$BASE_BRANCH')."
+        exit 1
+    fi
+
+    local parent_branch=$1
+    if [[ -z "$parent_branch" ]]; then
+        parent_branch="$BASE_BRANCH"
+    fi
+
+    if ! git rev-parse --verify "$parent_branch" >/dev/null 2>&1; then
+        log_error "Parent branch '$parent_branch' does not exist."
+        exit 1
+    fi
+
+    set_parent_branch "$current_branch" "$parent_branch"
+    log_success "Now tracking '$current_branch' with parent '$parent_branch'."
+}
+
 cmd_amend() {
-    _guard_on_base_branch "amend"
+    _guard_context "amend"
     local current_branch
     current_branch=$(get_current_branch)
 
@@ -416,7 +454,7 @@ cmd_amend() {
 }
 
 cmd_squash() {
-    _guard_on_base_branch "squash"
+    _guard_context "squash"
     local current_branch
     current_branch=$(get_current_branch)
 
@@ -501,6 +539,7 @@ cmd_create() {
 
 cmd_insert() {
     check_gh_auth
+    _guard_context "insert"
     local before_flag=false
     if [[ "$1" == "--before" ]]; then
         before_flag=true
@@ -520,7 +559,6 @@ cmd_insert() {
     current_branch=$(get_current_branch)
 
     if [[ "$before_flag" == true ]]; then
-        _guard_on_base_branch "insert --before"
         insertion_point_branch=$(get_parent_branch "$current_branch")
         if [[ -z "$insertion_point_branch" ]]; then
             log_error "Cannot determine parent of '$current_branch'. Is it part of a stack?"
@@ -550,7 +588,7 @@ cmd_insert() {
 }
 
 cmd_submit() {
-    _guard_on_base_branch "submit"
+    _guard_context "submit"
     check_gh_auth
     log_step "Syncing stack with GitHub..."
     
@@ -591,16 +629,10 @@ cmd_submit() {
         pr_title=$(git log -1 --pretty=%s "$branch_name")
         
         local pr_response
-        # Temporarily disable 'exit on error' for this one command, and check its exit code manually.
-        set +e
-        pr_response=$(gh_api_call "POST" "pulls" "title=$pr_title" "head=$branch_name" "base=$parent" 2>&1)
-        local exit_code=$?
-        set -e
-        
-        if [ $exit_code -ne 0 ]; then
-            log_error "Failed to create PR for '$branch_name'."
-            log_info "Response from GitHub: $pr_response"
-            exit 1 # Stop processing the rest of the stack
+        # Manually check for gh failure since `set -e` won't catch it in a command substitution.
+        if ! pr_response=$(gh_api_call "POST" "pulls" "title=$pr_title" "head=$branch_name" "base=$parent"); then
+             log_error "Failed to create PR for '$branch_name'. GitHub API call failed."
+             exit 1
         fi
         
         local new_pr_number
@@ -611,8 +643,8 @@ cmd_submit() {
             log_success "Created PR #${new_pr_number} for '$branch_name'."
         else
             log_error "Failed to create PR for '$branch_name'."
-            log_info "Could not parse PR number from response: $pr_response"
-            exit 1
+            log_info "Response from GitHub: $pr_response"
+            exit 1 # Exit with failure if PR number is null
         fi
     done
 
@@ -621,7 +653,7 @@ cmd_submit() {
 
 
 cmd_next() {
-    _guard_on_base_branch "next"
+    _guard_context "next"
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -637,7 +669,7 @@ cmd_next() {
 }
 
 cmd_prev() {
-    _guard_on_base_branch "prev"
+    _guard_context "prev"
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -653,7 +685,7 @@ cmd_prev() {
 }
 
 cmd_restack() {
-    _guard_on_base_branch "restack"
+    _guard_context "restack"
     local original_branch
     original_branch=$(get_current_branch)
     log_step "Restacking branches on top of '$original_branch'..."
@@ -695,7 +727,7 @@ cmd_continue() {
 
 
 cmd_sync() {
-    _guard_on_base_branch "sync"
+    _guard_context "sync"
     check_gh_auth
     local original_branch
     original_branch=$(get_current_branch)
@@ -787,7 +819,7 @@ cmd_sync() {
 
 
 cmd_push() {
-    _guard_on_base_branch "push"
+    _guard_context "push"
     log_step "Collecting all branches in the stack..."
     local top_branch
     top_branch=$(get_stack_top)
@@ -826,7 +858,7 @@ cmd_push() {
 }
 
 cmd_pr() {
-    _guard_on_base_branch "pr"
+    _guard_context "pr"
     check_gh_auth
     local current_branch
     current_branch=$(get_current_branch)
@@ -843,7 +875,7 @@ cmd_pr() {
 }
 
 cmd_delete() {
-    _guard_on_base_branch "delete"
+    _guard_context "delete"
     check_gh_auth
     local branch_to_delete
     branch_to_delete=$(get_current_branch)
@@ -934,8 +966,8 @@ cmd_list() {
 
 
 cmd_status() {
+    _guard_context "status"
     check_gh_auth
-    _guard_on_base_branch "status"
 
     log_step "Gathering stack status..."
     git fetch origin --quiet
@@ -1098,6 +1130,7 @@ cmd_help() {
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
     echo "  status                 Display the status of the current branch stack."
+    echo "  track [parent-branch]  Set the parent of the current branch, marking it as part of a stack."
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
     echo "  restack                Update branches above the current one after making changes."
@@ -1158,6 +1191,7 @@ main() {
         submit) cmd_submit "${cmd_args[@]}";;
         sync) cmd_sync "${cmd_args[@]}";;
         status) cmd_status "${cmd_args[@]}";;
+        track) cmd_track "${cmd_args[@]}";;
         next) cmd_next "${cmd_args[@]}";;
         prev) cmd_prev "${cmd_args[@]}";;
         restack) cmd_restack "${cmd_args[@]}";;
