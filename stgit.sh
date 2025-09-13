@@ -331,6 +331,36 @@ _finish_operation() {
 
 # --- CLI Commands ---
 
+cmd_amend() {
+    local current_branch
+    current_branch=$(get_current_branch)
+
+    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+        log_error "Cannot amend on the base branch ('$BASE_BRANCH')."
+        exit 1
+    fi
+
+    # Check if there are any changes (staged or unstaged)
+    if [[ -z $(git status --porcelain) ]]; then
+        log_warning "No changes (staged or unstaged) to amend."
+        exit 0
+    fi
+
+    log_step "Amending changes to the last commit on '$current_branch'..."
+    git add .
+    git commit --amend --no-edit
+    log_success "Commit amended successfully."
+
+    local child_branch
+    child_branch=$(get_child_branch "$current_branch")
+    if [[ -n "$child_branch" ]]; then
+        # If there are descendants, they need to be rebased. The restack command handles this.
+        cmd_restack
+    else
+        log_suggestion "Run 'stgit push' to update the remote."
+    fi
+}
+
 cmd_create() {
     if [[ -z "$1" ]]; then
         log_error "Branch name is required."
@@ -901,6 +931,7 @@ cmd_help() {
     echo "Usage: stgit <command> [options]"
     echo ""
     echo "Commands:"
+    echo "  amend                  Amend staged changes to the last commit and restack."
     echo "  create <branch-name>   Create a new branch on top of the current one."
     echo "  delete                 Delete the current branch and repair the stack."
     echo "  insert [--before] <branch-name>"
@@ -926,6 +957,7 @@ main() {
     shift || true
 
     case "$cmd" in
+        amend) cmd_amend "$@";;
         create) cmd_create "$@";;
         delete) cmd_delete "$@";;
         insert) cmd_insert "$@";;
@@ -949,5 +981,3 @@ main() {
 }
 
 main "$@"
-
-
