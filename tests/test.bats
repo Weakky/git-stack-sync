@@ -314,6 +314,38 @@ teardown() {
     assert_branch_does_not_exist feature-a
 }
 
+@test "sync: correctly handles non-consecutive merged branches (REGRESSION)" {
+    # This regression test is designed to fail with the old sync logic.
+    # The old logic only checked the status of a branch's parent, not the branch
+    # itself. This meant it would fail to detect that `feature-c` was merged
+    # because its parent, `feature-b`, was not.
+    
+    # Setup
+    create_stack feature-a feature-b feature-c
+    git config branch.feature-a.pr-number 10
+    git config branch.feature-c.pr-number 12
+    mock_pr_state 10 MERGED # feature-a is merged
+    mock_pr_state 12 MERGED # feature-c is merged
+    git checkout feature-c
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+
+    # Assertions
+    assert_success
+    assert_output --partial "Deleted local branch 'feature-a'"
+    assert_output --partial "Deleted local branch 'feature-c'"
+
+    # --- State Assertions ---
+    # The only remaining branch should be feature-b, parented on main.
+    assert_branch_parent feature-b main
+    assert_branch_does_not_exist feature-a
+    assert_branch_does_not_exist feature-c
+    # The current branch should be 'main' because the original branch was deleted.
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "main"
+}
+
 @test "sync: runs correctly when started from the middle of a stack" {
     # This test verifies that the `sync` command works correctly regardless
     # of which branch in the stack is currently checked out. The script should
