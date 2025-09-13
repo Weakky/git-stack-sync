@@ -1189,6 +1189,7 @@ cmd_status() {
     local stack_needs_restack=false
     local stack_is_out_of_sync_with_base=false
     local stack_needs_submit=false
+    local stack_has_merged_branches=false
 
     for branch in "${stack_branches[@]}"; do
         local parent_branch
@@ -1258,6 +1259,7 @@ cmd_status() {
                 pr_status="🟢 #${pr_number}: OPEN - $pr_url"
             elif [[ "$pr_state" == "MERGED" ]]; then
                 pr_status="🟣 #${pr_number}: MERGED"
+                stack_has_merged_branches=true
             elif [[ "$pr_state" == "CLOSED" ]]; then
                 pr_status="🔴 #${pr_number}: CLOSED"
             else
@@ -1272,9 +1274,9 @@ cmd_status() {
     done
     
     # --- Final Summary Logic ---
-    if [[ "$stack_is_out_of_sync_with_base" == true ]]; then
-        log_warning "The stack is behind '$BASE_BRANCH'."
-        log_suggestion "Run 'stgit sync' to update the entire stack."
+    if [[ "$stack_has_merged_branches" == true || "$base_behind" -gt 0 || "$stack_is_out_of_sync_with_base" == true ]]; then
+        log_warning "The stack contains merged branches or is behind the base branch."
+        log_suggestion "Run 'stgit sync' to clean up and rebase the stack."
     elif [[ "$stack_needs_restack" == true ]]; then
         log_warning "A branch in the stack is behind its parent."
         log_suggestion "Run 'stgit restack' from the out-of-date branch or 'stgit sync' for the whole stack."
