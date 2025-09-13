@@ -1035,6 +1035,110 @@ cmd_status() {
     fi
 }
 
+cmd_move() {
+    _guard_on_base_branch "move"
+    check_gh_auth
+
+    if [[ -z "$1" || ("$1" != "up" && "$1" != "down") ]]; then
+        log_error "A direction is required."
+        log_info "Usage: stgit move <up|down>"
+        exit 1
+    fi
+    local direction=$1
+
+    local current_branch
+    current_branch=$(get_current_branch)
+    
+    if [[ "$direction" == "up" ]]; then
+        local child_branch
+        child_branch=$(get_child_branch "$current_branch")
+        if [[ -z "$child_branch" ]]; then
+            log_error "Cannot move up. Branch '$current_branch' is already at the top of the stack."
+            exit 1
+        fi
+        
+        local parent_branch
+        parent_branch=$(get_parent_branch "$current_branch")
+        local grandchild_branch
+        grandchild_branch=$(get_child_branch "$child_branch")
+        
+        log_prompt "You are about to move '$current_branch' up, swapping it with '$child_branch'."
+        log_info "This will change the stack from:"
+        log_info "  ... <- $parent_branch <- $current_branch <- $child_branch <- ..."
+        log_info "To:"
+        log_info "  ... <- $parent_branch <- $child_branch <- $current_branch <- ..."
+        log_warning "This involves rewriting Git history and is complex to undo."
+        read -p "Are you sure? (y/N) " -n 1 -r; echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then log_warning "Move cancelled."; exit 1; fi
+
+        log_step "Reordering branches..."
+        git rebase --onto "$parent_branch" "$current_branch" "$child_branch"
+        git rebase --onto "$child_branch" "$parent_branch" "$current_branch"
+        if [[ -n "$grandchild_branch" ]]; then
+            git rebase --onto "$current_branch" "$child_branch" "$grandchild_branch"
+        fi
+
+        log_step "Updating parent metadata..."
+        set_parent_branch "$child_branch" "$parent_branch"
+        set_parent_branch "$current_branch" "$child_branch"
+        if [[ -n "$grandchild_branch" ]]; then
+            set_parent_branch "$grandchild_branch" "$current_branch"
+        fi
+
+        log_step "Updating GitHub PRs..."
+        _rebase_sub_stack_and_update_pr "$parent_branch" "$child_branch"
+        _rebase_sub_stack_and_update_pr "$child_branch" "$current_branch"
+        _rebase_sub_stack_and_update_pr "$current_branch" "$grandchild_branch"
+
+        log_success "Successfully moved '$current_branch' up."
+        log_suggestion "Run 'stgit push' to update all affected remote branches."
+
+    elif [[ "$direction" == "down" ]]; then
+        local parent_branch
+        parent_branch=$(get_parent_branch "$current_branch")
+        if [[ -z "$parent_branch" || "$parent_branch" == "$BASE_BRANCH" ]]; then
+            log_error "Cannot move down. Branch '$current_branch' is already at the bottom of the stack."
+            exit 1
+        fi
+
+        local grandparent_branch
+        grandparent_branch=$(get_parent_branch "$parent_branch")
+        local child_branch
+        child_branch=$(get_child_branch "$current_branch")
+
+        log_prompt "You are about to move '$current_branch' down, swapping it with '$parent_branch'."
+        log_info "This will change the stack from:"
+        log_info "  ... <- $grandparent_branch <- $parent_branch <- $current_branch <- ..."
+        log_info "To:"
+        log_info "  ... <- $grandparent_branch <- $current_branch <- $parent_branch <- ..."
+        log_warning "This involves rewriting Git history and is complex to undo."
+        read -p "Are you sure? (y/N) " -n 1 -r; echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then log_warning "Move cancelled."; exit 1; fi
+
+        log_step "Reordering branches..."
+        git rebase --onto "$grandparent_branch" "$parent_branch" "$current_branch"
+        git rebase --onto "$current_branch" "$grandparent_branch" "$parent_branch"
+        if [[ -n "$child_branch" ]]; then
+            git rebase --onto "$parent_branch" "$current_branch" "$child_branch"
+        fi
+        
+        log_step "Updating parent metadata..."
+        set_parent_branch "$current_branch" "$grandparent_branch"
+        set_parent_branch "$parent_branch" "$current_branch"
+        if [[ -n "$child_branch" ]]; then
+            set_parent_branch "$child_branch" "$parent_branch"
+        fi
+        
+        log_step "Updating GitHub PRs..."
+        _rebase_sub_stack_and_update_pr "$grandparent_branch" "$current_branch"
+        _rebase_sub_stack_and_update_pr "$current_branch" "$parent_branch"
+        _rebase_sub_stack_and_update_pr "$parent_branch" "$child_branch"
+
+        log_success "Successfully moved '$current_branch' down."
+        log_suggestion "Run 'stgit push' to update all affected remote branches."
+    fi
+}
+
 
 cmd_help() {
     echo "stgit - A tool for managing stacked Git branches with GitHub integration."
@@ -1050,6 +1154,7 @@ cmd_help() {
     echo "                         Insert a new branch. By default, inserts after the"
     echo "                         current branch. Use --before to insert before it."
     echo "  list|ls                List all available stacks."
+    echo "  move <up|down>         Move the current branch up or down within the stack."
     echo "  squash                 Squash commits on the current branch and restack."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
@@ -1078,6 +1183,7 @@ main() {
         create) cmd_create "$@";;
         delete) cmd_delete "$@";;
         insert) cmd_insert "$@";;
+        move) cmd_move "$@";;
         squash) cmd_squash "$@";;
         submit) cmd_submit "$@";;
         sync) cmd_sync "$@";;
@@ -1100,4 +1206,3 @@ main() {
 }
 
 main "$@"
-
