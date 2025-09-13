@@ -980,6 +980,7 @@ cmd_help() {
     echo "  insert [--before] <branch-name>"
     echo "                         Insert a new branch. By default, inserts after the"
     echo "                         current branch. Use --before to insert before it."
+    echo "  squash                 Squash commits on the current branch and restack."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
@@ -1004,6 +1005,7 @@ main() {
         create) cmd_create "$@";;
         delete) cmd_delete "$@";;
         insert) cmd_insert "$@";;
+        squash) cmd_squash "$@";;
         submit) cmd_submit "$@";;
         sync) cmd_sync "$@";;
         status) cmd_status "$@";;
@@ -1024,3 +1026,4 @@ main() {
 }
 
 main "$@"
+
