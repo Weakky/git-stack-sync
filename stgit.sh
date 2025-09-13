@@ -918,6 +918,19 @@ cmd_sync() {
     log_step "Syncing stack with '$BASE_BRANCH' and checking for merged branches..."
     git fetch origin --quiet
 
+    # Update the local base branch to match the remote.
+    log_info "Updating local base branch '$BASE_BRANCH'..."
+    git checkout "$BASE_BRANCH" >/dev/null 2>&1
+    if ! git pull --ff-only origin "$BASE_BRANCH"; then
+        log_error "Your local base branch ('$BASE_BRANCH') has diverged from the remote."
+        log_info "Please resolve this before running sync. A common cause is having local commits on '$BASE_BRANCH'."
+        log_suggestion "Consider running 'git checkout $BASE_BRANCH && git reset --hard origin/$BASE_BRANCH'."
+        git checkout "$original_branch" >/dev/null 2>&1 # Go back to original branch before exiting
+        exit 1
+    fi
+    log_success "Local base branch is up to date."
+    git checkout "$original_branch" >/dev/null 2>&1
+
     local stack_branches=()
     local current_branch_for_stack_build
     current_branch_for_stack_build=$(get_stack_top)
@@ -1405,4 +1418,3 @@ main() {
 }
 
 main "$@"
-
