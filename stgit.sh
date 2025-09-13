@@ -465,7 +465,7 @@ cmd_clean() {
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_warning "Clean cancelled."
-            exit 1
+            exit 0
         fi
     fi
 
@@ -811,7 +811,7 @@ cmd_push() {
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_warning "Push cancelled."
-            exit 1
+            exit 0 # Exit with success on user cancellation.
         fi
     fi
 
@@ -860,7 +860,7 @@ cmd_delete() {
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_warning "Deletion cancelled."
-            exit 1
+            exit 0
         fi
     fi
     
