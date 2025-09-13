@@ -41,12 +41,12 @@ log_prompt() {
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
     log_error "The GitHub CLI ('gh') is not installed."
-    log_info "Please install it to use GitHub integration features: https://cli.github.com/"
+    log_info "Please install it to use GitHub integration features: [https://cli.github.com/](https://cli.github.com/)"
     exit 1
 fi
 if ! command -v jq &> /dev/null; then
     log_error "'jq' is not installed."
-    log_info "Please install it to parse API responses: https://stedolan.github.io/jq/"
+    log_info "Please install it to parse API responses: [https://stedolan.github.io/jq/](https://stedolan.github.io/jq/)"
     exit 1
 fi
 
@@ -1104,57 +1104,60 @@ cmd_help() {
 
 main() {
     # --- Argument Parsing ---
-    local command=""
-    local args=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --yes|-y)
+    # 1. First, parse all global options that can appear anywhere.
+    # We build a new array `all_args` that excludes the global options.
+    local all_args=()
+    for arg in "$@"; do
+        case "$arg" in
+            -y|--yes)
                 AUTO_CONFIRM=true
-                shift # past argument
                 ;;
             -h|--help)
-                # Handle help immediately and exit
                 cmd_help
                 exit 0
                 ;;
+            # Keep all other arguments
             *)
-                # If it's not a known global option, it must be the command or an argument.
-                # We assume the first non-option argument is the command.
-                if [[ -z "$command" && ! "$1" =~ ^- ]]; then
-                    command=$1
-                else
-                    args+=("$1")
-                fi
-                shift # past argument
+                all_args+=("$arg")
                 ;;
         esac
     done
 
+    # 2. Now, the command is the first element of the remaining arguments.
+    local command=${all_args[0]-} # Use - to avoid error if no command
+    
+    # 3. The rest are the command's specific arguments.
+    # This uses slicing to get all elements from index 1 onwards.
+    local cmd_args=("${all_args[@]:1}")
+
+    # If no command was provided (e.g., only options like `stgit --yes` were given), show help.
+    if [[ -z "$command" ]]; then
+        cmd_help
+        exit 0
+    fi
+
     _initialize_config
 
     # --- Command Dispatch ---
+    # Pass the command-specific arguments to the command function.
     case "$command" in
-        amend) cmd_amend "${args[@]}";;
-        clean) cmd_clean "${args[@]}";;
-        create) cmd_create "${args[@]}";;
-        delete) cmd_delete "${args[@]}";;
-        insert) cmd_insert "${args[@]}";;
-        squash) cmd_squash "${args[@]}";;
-        submit) cmd_submit "${args[@]}";;
-        sync) cmd_sync "${args[@]}";;
-        status) cmd_status "${args[@]}";;
-        next) cmd_next "${args[@]}";;
-        prev) cmd_prev "${args[@]}";;
-        restack) cmd_restack "${args[@]}";;
-        continue) cmd_continue "${args[@]}";;
-        push) cmd_push "${args[@]}";;
-        pr) cmd_pr "${args[@]}";;
-        list|ls) cmd_list "${args[@]}";;
-        help) cmd_help;; # Explicitly handle 'help' command
-        "")
-            # If no command was given, but flags might have been, default to showing help.
-            cmd_help
-            ;;
+        amend) cmd_amend "${cmd_args[@]}";;
+        clean) cmd_clean "${cmd_args[@]}";;
+        create) cmd_create "${cmd_args[@]}";;
+        delete) cmd_delete "${cmd_args[@]}";;
+        insert) cmd_insert "${cmd_args[@]}";;
+        squash) cmd_squash "${cmd_args[@]}";;
+        submit) cmd_submit "${cmd_args[@]}";;
+        sync) cmd_sync "${cmd_args[@]}";;
+        status) cmd_status "${cmd_args[@]}";;
+        next) cmd_next "${cmd_args[@]}";;
+        prev) cmd_prev "${cmd_args[@]}";;
+        restack) cmd_restack "${cmd_args[@]}";;
+        continue) cmd_continue "${cmd_args[@]}";;
+        push) cmd_push "${cmd_args[@]}";;
+        pr) cmd_pr "${cmd_args[@]}";;
+        list|ls) cmd_list "${cmd_args[@]}";;
+        help) cmd_help;;
         *)
             log_error "Unknown command: $command"
             cmd_help
