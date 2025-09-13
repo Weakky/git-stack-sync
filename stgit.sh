@@ -596,7 +596,7 @@ cmd_squash() {
     echo "   Stack Before:"
     for branch in "${stack_before[@]}"; do
         if [[ "$branch" == "$branch_to_squash" ]]; then
-            echo -e "     - ${C_RED}${branch}${C_RESET}  <-- to be squashed and deleted"
+            echo -e "     - ${C_RED}${branch}  <-- to be squashed and deleted${C_RESET}"
         else
             echo "     - $branch"
         fi
@@ -607,7 +607,7 @@ cmd_squash() {
         if [[ "$branch" == "$branch_to_squash" ]]; then
             continue # Skip the deleted branch
         elif [[ "$branch" == "$target_branch" ]]; then
-            echo -e "     - ${C_YELLOW}${branch}${C_RESET} <-- will contain commits from '$branch_to_squash'"
+            echo -e "     - ${C_YELLOW}${branch} <-- will contain commits from '$branch_to_squash'${C_RESET}"
         else
             echo "     - $branch"
         fi
