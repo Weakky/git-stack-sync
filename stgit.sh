@@ -114,6 +114,7 @@ get_current_branch() {
 }
 
 # Helper function to get the parent of a given branch in the stack.
+# It now ONLY reads from the git config.
 get_parent_branch() {
     local branch_name=$1
     git config --get "branch.${branch_name}.parent" || echo ""
@@ -425,6 +426,20 @@ cmd_track() {
 
     set_parent_branch "$current_branch" "$parent_branch"
     log_success "Now tracking '$current_branch' with parent '$parent_branch'."
+
+    # Check for an existing PR for this branch.
+    log_info "Checking for existing pull request for '$current_branch'..."
+    local pr_number
+    # Use `jq` with `// empty` to output nothing if no PR is found.
+    # The `2>/dev/null` suppresses errors from gh if the user is not authenticated.
+    pr_number=$(gh pr list --head "$current_branch" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null)
+
+    if [[ -n "$pr_number" ]]; then
+        set_pr_number "$current_branch" "$pr_number"
+        log_success "Found and tracked existing PR #${pr_number}."
+    else
+        log_info " -> No open PR found for '$current_branch'."
+    fi
 }
 
 cmd_amend() {
