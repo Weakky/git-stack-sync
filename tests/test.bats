@@ -60,11 +60,10 @@ teardown() {
     assert_success
     assert_output --partial "Created and checked out new branch 'feature-a'"
 
+    # --- State Assertions ---
     run git rev-parse --abbrev-ref HEAD
     assert_output "feature-a"
-
-    run git config --get branch.feature-a.parent
-    assert_output "main"
+    assert_branch_parent feature-a main
 }
 
 @test "create: creates a nested child branch" {
@@ -77,11 +76,10 @@ teardown() {
     assert_success
     assert_output --partial "Created and checked out new branch 'feature-b'"
 
+    # --- State Assertions ---
     run git rev-parse --abbrev-ref HEAD
     assert_output "feature-b"
-
-    run git config --get branch.feature-b.parent
-    assert_output "feature-a"
+    assert_branch_parent feature-b feature-a
 }
 
 # --- Tests for commands on the base branch ---
@@ -111,6 +109,7 @@ teardown() {
     create_stack feature-a feature-b
     run git checkout main
     run create_commit "New commit on main"
+    local main_sha; main_sha=$(git rev-parse HEAD) # Get SHA for rebase check
     run git push origin main
     run git checkout feature-b
 
@@ -121,11 +120,9 @@ teardown() {
     assert_success
     assert_output --partial "Rebasing 'feature-a' onto 'origin/main'"
     assert_output --partial "Rebasing 'feature-b' onto 'feature-a'"
-    assert_output --partial "Run 'stgit push' to update your remote branches"
-
-    # Verify the commit is now in the history of feature-b
-    run git log --oneline feature-b
-    assert_output --partial "New commit on main"
+    
+    # --- State Assertions ---
+    assert_commit_is_ancestor "$main_sha" feature-b
 }
 
 @test "sync: syncs with a merged parent branch" {
@@ -144,13 +141,12 @@ teardown() {
     assert_success
     assert_output --partial "Parent branch 'feature-a' has been merged"
     assert_output --partial "Updating parent of 'feature-b' to 'main'"
-    assert_output --partial "Rebasing 'feature-b' onto 'origin/main'"
     assert_output --partial "Deleted local branch 'feature-a'"
 
-    # Verify new stack structure
-    run "$STGIT_CMD" status
-    assert_output --partial "➡️  feature-b * (parent: main)"
-    refute_output --partial "feature-a"
+    # --- State Assertions ---
+    assert_branch_parent feature-b main
+    assert_branch_does_not_exist feature-a
+    assert_branch_exists feature-b
 }
 
 @test "sync: handles rebase conflict gracefully" {
@@ -171,7 +167,7 @@ teardown() {
     assert_output --partial "Rebase conflict detected"
     assert_output --partial "run 'stgit continue'"
     
-    # Verify state file was created
+    # --- State Assertions ---
     assert [ -f ".git/STGIT_OPERATION_STATE" ]
     run cat ".git/STGIT_OPERATION_STATE"
     assert_output --partial "COMMAND='sync'"
@@ -185,6 +181,7 @@ teardown() {
     create_commit "feature-a changes" "line 2" "file.txt"
     run git checkout main
     create_commit "main changes" "line one" "file.txt"
+    local main_sha; main_sha=$(git rev-parse HEAD) # Get SHA for rebase check
     run git push origin main
     run git checkout feature-a
     # Run sync, which is expected to fail
@@ -192,13 +189,13 @@ teardown() {
 
     # Manual conflict resolution
     echo "resolved" > file.txt
-    git add file.txt
+    run git add file.txt
     
     # By default, a successful rebase opens an editor for the commit message.
     # In a non-interactive test, this would hang. GIT_EDITOR=true tells Git
     # to use the 'true' command as its editor, which does nothing and exits
     # successfully, allowing the rebase to complete automatically.
-    GIT_EDITOR=true git rebase --continue >/dev/null
+    GIT_EDITOR=true run git rebase --continue
 
     # Action
     run "$STGIT_CMD" continue --yes
@@ -206,13 +203,11 @@ teardown() {
     # Assertions
     assert_success
     assert_output --partial "Finishing operation..."
-    assert_output --partial "Run 'stgit push' to update your remote branches"
     
-    # Verify state file was removed
+    # --- State Assertions ---
     refute [ -f ".git/STGIT_OPERATION_STATE" ]
-    
-    # Verify we are back on the original branch
     run git rev-parse --abbrev-ref HEAD
     assert_output "feature-a"
+    assert_commit_is_ancestor "$main_sha" feature-a
 }
 

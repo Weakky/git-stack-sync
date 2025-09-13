@@ -71,3 +71,42 @@ create_stack() {
     # Checkout the last branch created
     run git checkout "$parent"
 }
+
+# --- New Git State Assertion Helpers ---
+
+# Asserts that a branch's parent is set correctly in stgit's config.
+# Usage: assert_branch_parent <child_branch> <expected_parent_branch>
+assert_branch_parent() {
+    local child=$1
+    local expected_parent=$2
+    run git config --get "branch.${child}.parent"
+    assert_success
+    assert_output "$expected_parent"
+}
+
+# Asserts that a local branch exists.
+# Usage: assert_branch_exists <branch_name>
+assert_branch_exists() {
+    local branch=$1
+    run git rev-parse --verify "$branch"
+    assert_success "Expected branch '$branch' to exist, but it does not."
+}
+
+# Asserts that a local branch does not exist.
+# Usage: assert_branch_does_not_exist <branch_name>
+assert_branch_does_not_exist() {
+    local branch=$1
+    run git rev-parse --verify "$branch"
+    assert_failure "Expected branch '$branch' to not exist, but it does."
+}
+
+# Asserts that one commit is an ancestor of another. Useful for verifying rebases.
+# Usage: assert_commit_is_ancestor <ancestor_commitish> <descendant_commitish>
+assert_commit_is_ancestor() {
+    local ancestor=$1
+    local descendant=$2
+    # `git merge-base --is-ancestor` exits with 0 if true, 1 if false.
+    run git merge-base --is-ancestor "$ancestor" "$descendant"
+    assert_success "Expected commit '$ancestor' to be an ancestor of '$descendant'."
+}
+
