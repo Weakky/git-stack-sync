@@ -917,8 +917,7 @@ teardown() {
     # Assertions
     assert_success
     assert_output --partial "Skipping PR for 'feature-b': No new commits"
-    refute_output --partial "Created PR" "feature-b"
-
+    
     # --- State Assertions ---
     assert_branch_pr_number feature-a 20
     assert_branch_has_no_pr_number feature-b

@@ -591,7 +591,17 @@ cmd_submit() {
         pr_title=$(git log -1 --pretty=%s "$branch_name")
         
         local pr_response
-        pr_response=$(gh_api_call "POST" "pulls" "title=$pr_title" "head=$branch_name" "base=$parent")
+        # Temporarily disable 'exit on error' for this one command, and check its exit code manually.
+        set +e
+        pr_response=$(gh_api_call "POST" "pulls" "title=$pr_title" "head=$branch_name" "base=$parent" 2>&1)
+        local exit_code=$?
+        set -e
+        
+        if [ $exit_code -ne 0 ]; then
+            log_error "Failed to create PR for '$branch_name'."
+            log_info "Response from GitHub: $pr_response"
+            exit 1 # Stop processing the rest of the stack
+        fi
         
         local new_pr_number
         new_pr_number=$(echo "$pr_response" | jq -r '.number')
@@ -601,7 +611,8 @@ cmd_submit() {
             log_success "Created PR #${new_pr_number} for '$branch_name'."
         else
             log_error "Failed to create PR for '$branch_name'."
-            log_info "Response from GitHub: $pr_response"
+            log_info "Could not parse PR number from response: $pr_response"
+            exit 1
         fi
     done
 

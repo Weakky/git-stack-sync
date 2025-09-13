@@ -41,7 +41,7 @@ elif [[ "$1" == "pr" && "$2" == "close" ]]; then
 elif [[ "$1" == "api" && "$2" =~ pulls/[0-9]+$ && "$3" == "--method" && "$4" == "PATCH" ]]; then
     exit 0
 
-elif [[ "$1" == "api" && "$2" == "pulls" && "$3" == "--method" && "$4" == "POST" ]]; then
+elif [[ "$1" == "api" && "$2" =~ pulls$ && "$3" == "--method" && "$4" == "POST" ]]; then
     # This mocks the PR creation call.
     if [[ -f "$MOCK_STATE_DIR/pr_create_fail" ]]; then
         echo '{"message":"Mock API error: Failed to create PR."}'
