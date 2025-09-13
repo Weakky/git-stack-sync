@@ -139,8 +139,14 @@ get_all_stack_bottoms() {
     for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
         local parent
         parent=$(get_parent_branch "$branch")
+        # A branch is the bottom of a STACK if its parent is the base branch,
+        # AND it has a child branch. This distinguishes a stack from a single feature branch.
         if [[ "$parent" == "$BASE_BRANCH" ]]; then
-            bottoms+=("$branch")
+            local child
+            child=$(get_child_branch "$branch")
+            if [[ -n "$child" ]]; then
+                bottoms+=("$branch")
+            fi
         fi
     done
     echo "${bottoms[@]}"
