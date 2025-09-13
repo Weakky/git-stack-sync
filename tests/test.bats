@@ -105,6 +105,10 @@ teardown() {
 
 # --- Tests for 'stgit sync' ---
 @test "sync: simple sync with no merged branches" {
+    # This test verifies the most basic 'sync' scenario.
+    # A stack of branches exists, and the base branch ('main') gets a new commit.
+    # 'sync' should rebase the entire stack on top of the new 'main'.
+    
     # Setup
     create_stack feature-a feature-b
     run git checkout main
@@ -120,10 +124,15 @@ teardown() {
     assert_success
     
     # --- State Assertions ---
+    # Verify that the new commit from 'main' is now part of feature-b's history.
     assert_commit_is_ancestor "$main_sha" feature-b
 }
 
 @test "sync: syncs with a merged parent branch" {
+    # This test ensures that if a branch in the middle of a stack is merged
+    # (e.g., via the GitHub UI), 'sync' correctly detects it, removes it,
+    # and re-parents its child branch onto its grandparent.
+    
     # Setup
     create_stack feature-a feature-b
     # Mock PRs: #10 for feature-a, #11 for feature-b
@@ -132,7 +141,7 @@ teardown() {
     mock_pr_state 10 MERGED # Mock feature-a's PR as merged
     git checkout feature-b
 
-    # Action: Run sync with --yes
+    # Action: Run sync with --yes to auto-confirm branch deletion
     run "$STGIT_CMD" sync --yes
 
     # Assertions
@@ -140,12 +149,18 @@ teardown() {
     assert_output --partial "Deleted local branch 'feature-a'"
 
     # --- State Assertions ---
+    # feature-b's parent should now be 'main'.
     assert_branch_parent feature-b main
+    # The merged branch 'feature-a' should be gone.
     assert_branch_does_not_exist feature-a
     assert_branch_exists feature-b
 }
 
 @test "sync: handles rebase conflict gracefully" {
+    # This test ensures that if 'git rebase' fails during a sync (due to a merge
+    # conflict), the script stops and provides instructions to the user on how
+    # to resolve it and continue the operation.
+    
     # Setup
     create_commit "conflict-file" "line 1" "file.txt"
     run "$STGIT_CMD" create feature-a
@@ -164,6 +179,7 @@ teardown() {
     assert_output --partial "run 'stgit continue'"
     
     # --- State Assertions ---
+    # A state file should exist to allow 'stgit continue' to resume.
     assert [ -f ".git/STGIT_OPERATION_STATE" ]
     run cat ".git/STGIT_OPERATION_STATE"
     assert_output --partial "COMMAND='sync'"
@@ -171,6 +187,10 @@ teardown() {
 }
 
 @test "sync: 'continue' resumes after a sync conflict" {
+    # This tests the second half of the conflict resolution workflow: after a
+    # user manually resolves a rebase conflict, 'stgit continue' should
+    # successfully finish the operation.
+    
     # Setup: Create a conflict
     create_commit "conflict-file" "line 1" "file.txt"
     run "$STGIT_CMD" create feature-a
@@ -208,6 +228,11 @@ teardown() {
 }
 
 @test "sync: syncs with multiple consecutive merged branches" {
+    # This tests a more complex scenario where multiple adjacent branches
+    # in the middle of a stack have been merged. 'sync' should correctly
+    # "bridge the gap" by reparenting the first unmerged child onto the last
+    # unmerged ancestor.
+    
     # Setup
     create_stack feature-a feature-b feature-c feature-d
     git config branch.feature-b.pr-number 12
@@ -225,6 +250,7 @@ teardown() {
     assert_output --partial "Deleted local branch 'feature-c'"
 
     # --- State Assertions ---
+    # 'feature-d' should now be parented onto 'feature-a'.
     assert_branch_parent feature-d feature-a
     assert_branch_does_not_exist feature-b
     assert_branch_does_not_exist feature-c
@@ -233,6 +259,10 @@ teardown() {
 }
 
 @test "sync: syncs when entire stack is merged" {
+    # This tests the edge case where every single branch in the stack has
+    # been merged. The command should detect this, clean up all local
+    # branches, and not attempt to perform a rebase.
+    
     # Setup
     create_stack feature-a feature-b
     git config branch.feature-a.pr-number 10
@@ -253,11 +283,17 @@ teardown() {
     # --- State Assertions ---
     assert_branch_does_not_exist feature-a
     assert_branch_does_not_exist feature-b
+    # The current branch should be 'main' after the stack is deleted.
     run git rev-parse --abbrev-ref HEAD
     assert_output "main"
 }
 
 @test "sync: detects merged branch without a PR" {
+    # This tests the fallback mechanism for detecting merged branches. If a
+    # branch was merged directly into the base branch without a PR (or if stgit
+    # doesn't know the PR number), it should still be detected as merged and
+    # cleaned up.
+    
     # Setup
     create_stack feature-a feature-b
     # Manually merge feature-a into main to simulate a merge without a PR
@@ -279,6 +315,10 @@ teardown() {
 }
 
 @test "sync: runs correctly when started from the middle of a stack" {
+    # This test verifies that the `sync` command works correctly regardless
+    # of which branch in the stack is currently checked out. The script should
+    # be smart enough to find the top of the stack and sync all branches.
+    
     # Setup
     create_stack feature-a feature-b feature-c
     git config branch.feature-a.pr-number 10
@@ -296,11 +336,15 @@ teardown() {
     assert_branch_parent feature-b main
     assert_branch_parent feature-c feature-b
     assert_branch_does_not_exist feature-a
+    # The script should return the user to their original branch.
     run git rev-parse --abbrev-ref HEAD
-    assert_output "feature-b" # Should return to original branch
+    assert_output "feature-b" 
 }
 
 @test "sync: runs correctly on a single-branch stack" {
+    # This test covers the simplest stack: a single feature branch off 'main'.
+    # 'sync' should just perform a standard rebase against the updated base branch.
+    
     # Setup
     run "$STGIT_CMD" create feature-a
     run create_commit "commit for feature-a"
@@ -322,6 +366,9 @@ teardown() {
 }
 
 @test "sync: does nothing when already up-to-date" {
+    # If the stack is already perfectly in sync with the remote base branch,
+    # the command should complete successfully without making any changes.
+    
     # Setup
     create_stack feature-a feature-b
     local sha_a_before; sha_a_before=$(git rev-parse feature-a)
@@ -335,6 +382,7 @@ teardown() {
     assert_success
     
     # --- State Assertions ---
+    # Verify that the commit hashes for the branches have not changed.
     local sha_a_after; sha_a_after=$(git rev-parse feature-a)
     local sha_b_after; sha_b_after=$(git rev-parse feature-b)
     assert_equal "$sha_a_before" "$sha_a_after"
