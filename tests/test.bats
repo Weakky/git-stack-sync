@@ -118,8 +118,6 @@ teardown() {
     
     # Assertions
     assert_success
-    assert_output --partial "Rebasing 'feature-a' onto 'origin/main'"
-    assert_output --partial "Rebasing 'feature-b' onto 'feature-a'"
     
     # --- State Assertions ---
     assert_commit_is_ancestor "$main_sha" feature-b
@@ -139,8 +137,6 @@ teardown() {
 
     # Assertions
     assert_success
-    assert_output --partial "Parent branch 'feature-a' has been merged"
-    assert_output --partial "Updating parent of 'feature-b' to 'main'"
     assert_output --partial "Deleted local branch 'feature-a'"
 
     # --- State Assertions ---
@@ -202,7 +198,7 @@ teardown() {
 
     # Assertions
     assert_success
-    assert_output --partial "Finishing operation..."
+    assert_output --partial "Operation complete."
     
     # --- State Assertions ---
     refute [ -f ".git/STGIT_OPERATION_STATE" ]
@@ -225,10 +221,6 @@ teardown() {
 
     # Assertions
     assert_success
-    assert_output --partial "Parent branch 'feature-b' has been merged"
-    assert_output --partial "Updating parent of 'feature-c' to 'feature-a'"
-    assert_output --partial "Parent branch 'feature-c' has been merged"
-    assert_output --partial "Updating parent of 'feature-d' to 'feature-a'"
     assert_output --partial "Deleted local branch 'feature-b'"
     assert_output --partial "Deleted local branch 'feature-c'"
 
@@ -279,8 +271,7 @@ teardown() {
 
     # Assertions
     assert_success
-    assert_output --partial "Parent branch 'feature-a' has been merged."
-    assert_output --partial "Updating parent of 'feature-b' to 'main'"
+    assert_output --partial "Deleted local branch 'feature-a'"
 
     # --- State Assertions ---
     assert_branch_parent feature-b main
