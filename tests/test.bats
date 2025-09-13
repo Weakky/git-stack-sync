@@ -582,3 +582,122 @@ teardown() {
     assert_output --partial "No stgit operation to continue. Nothing to do."
 }
 
+# --- Tests for 'stgit insert' ---
+@test "insert: inserts a branch in the middle of a stack" {
+    # This test verifies that inserting a new branch (`feature-b`) between two
+    # existing branches (`feature-a` and `feature-c`) correctly updates the
+    # parentage and rebases the descendant branch (`feature-c`).
+    
+    # Setup
+    create_stack feature-a feature-c
+    run git checkout feature-c
+    run create_commit "commit for c"
+    local c_sha_before; c_sha_before=$(git rev-parse HEAD)
+    run git checkout feature-a
+
+    # Action
+    run "$STGIT_CMD" insert feature-b
+
+    # Assertions
+    assert_success
+    assert_output --partial "Successfully inserted 'feature-b' into the stack"
+
+    # --- State Assertions ---
+    assert_branch_parent feature-b feature-a
+    assert_branch_parent feature-c feature-b
+    # The original commit on 'c' should still be reachable from the new 'c'.
+    assert_commit_is_reachable "$c_sha_before" feature-c
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-b"
+}
+
+@test "insert: inserts a branch at the end of a stack" {
+    # This tests inserting a new branch when checked out on the top-most
+    # branch of a stack. It should simply extend the stack.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" insert feature-c
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    assert_branch_parent feature-c feature-b
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-c"
+}
+
+@test "insert: inserts --before a branch in the middle of a stack" {
+    # This test verifies the `--before` flag. Inserting `feature-b` before
+    # `feature-c` should place it between `feature-a` and `feature-c`.
+    
+    # Setup
+    create_stack feature-a feature-c
+    run git checkout feature-c
+    run create_commit "commit for c"
+    local c_sha_before; c_sha_before=$(git rev-parse HEAD)
+
+    # Action
+    run "$STGIT_CMD" insert --before feature-b
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    assert_branch_parent feature-b feature-a
+    assert_branch_parent feature-c feature-b
+    assert_commit_is_reachable "$c_sha_before" feature-c
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-b"
+}
+
+@test "insert: inserts --before at the beginning of a stack" {
+    # This tests inserting a branch before the very first branch of a stack.
+    # The new branch should become the new "bottom" of the stack.
+    
+    # Setup
+    create_stack feature-b feature-c
+    run git checkout feature-b
+    run create_commit "commit for b"
+    local b_sha_before; b_sha_before=$(git rev-parse HEAD)
+
+    # Action
+    run "$STGIT_CMD" insert --before feature-a
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    assert_branch_parent feature-a main
+    assert_branch_parent feature-b feature-a
+    assert_commit_is_reachable "$b_sha_before" feature-b
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-a"
+}
+
+@test "insert: inserts a branch with an existing PR" {
+    # If the branch that is being re-parented has a PR, `insert` should
+    # update the base of that PR on GitHub.
+    
+    # Setup
+    create_stack feature-a feature-c
+    git config branch.feature-c.pr-number 15
+    mock_pr_state 15 OPEN
+    run git checkout feature-a
+
+    # Action
+    run "$STGIT_CMD" insert feature-b
+
+    # Assertions
+    assert_success
+    # The mock for `gh api` doesn't produce output, but we can check the logs.
+    assert_output --partial "Updating GitHub PR for 'feature-c'"
+
+    # --- State Assertions ---
+    assert_branch_parent feature-c feature-b
+}
+

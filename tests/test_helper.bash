@@ -110,3 +110,19 @@ assert_commit_is_ancestor() {
     assert_success "Expected commit '$ancestor' to be an ancestor of '$descendant'."
 }
 
+# Asserts that the content of an old commit (pre-rebase) is still present
+# in the history of a branch by checking for its commit message. This is
+# useful because the commit SHA will change after a rebase.
+# Usage: assert_commit_is_reachable <old_commit_sha> <branch_name>
+assert_commit_is_reachable() {
+    local old_commit_sha=$1
+    local branch=$2
+    # Get the subject of the original commit.
+    local old_subject
+    old_subject=$(git show -s --format=%s "$old_commit_sha")
+    
+    # Get all commit subjects for the branch and check if the old one is present.
+    run git log "$branch" --format=%s
+    assert_success
+    assert_output --partial "$old_subject"
+}
