@@ -707,39 +707,40 @@ cmd_sync() {
 
     local merged_branches_to_delete=()
 
+    # New logic: Iterate through each branch in the stack and check its own status.
     for branch in "${stack_branches[@]}"; do
-        local parent
-        parent=$(get_parent_branch "$branch")
-
-        if [[ -z "$parent" || "$parent" == "$BASE_BRANCH" ]]; then continue; fi
-
         local pr_number
-        pr_number=$(get_pr_number "$parent")
+        pr_number=$(get_pr_number "$branch")
         local is_merged=false
 
         if [[ -n "$pr_number" ]]; then
-            log_info "Checking status of PR #${pr_number} for branch '$parent'..."
+            log_info "Checking status of PR #${pr_number} for branch '$branch'..."
             local pr_state
             pr_state=$(gh pr view "$pr_number" --json state --jq .state 2>/dev/null || echo "NOT_FOUND")
             if [[ "$pr_state" == "MERGED" ]]; then is_merged=true; fi
         fi
         
+        # Fallback check if no PR is found or PR is not merged yet
         if [[ "$is_merged" == false ]]; then
-            if git merge-base --is-ancestor "$parent" "origin/$BASE_BRANCH"; then
+            if git merge-base --is-ancestor "$branch" "origin/$BASE_BRANCH"; then
                 is_merged=true
             fi
         fi
 
         if [[ "$is_merged" == true ]]; then
-            local grandparent
-            grandparent=$(get_parent_branch "$parent")
-            if [[ -z "$grandparent" ]]; then grandparent="$BASE_BRANCH"; fi
+            log_success "Branch '$branch' has been merged."
+            local child
+            child=$(get_child_branch "$branch")
+            local parent
+            parent=$(get_parent_branch "$branch")
+            if [[ -z "$parent" ]]; then parent="$BASE_BRANCH"; fi
+
+            if [[ -n "$child" ]]; then
+                log_info "Updating parent of '$child' to '$parent'."
+                set_parent_branch "$child" "$parent"
+            fi
             
-            log_success "Parent branch '$parent' has been merged."
-            log_info "Updating parent of '$branch' to '$grandparent'."
-            set_parent_branch "$branch" "$grandparent"
-            
-            merged_branches_to_delete+=("$parent")
+            merged_branches_to_delete+=("$branch")
         fi
     done
 

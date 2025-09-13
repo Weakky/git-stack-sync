@@ -211,3 +211,79 @@ teardown() {
     assert_commit_is_ancestor "$main_sha" feature-a
 }
 
+@test "sync: syncs with multiple consecutive merged branches" {
+    # Setup
+    create_stack feature-a feature-b feature-c feature-d
+    git config branch.feature-b.pr-number 12
+    git config branch.feature-c.pr-number 13
+    mock_pr_state 12 MERGED
+    mock_pr_state 13 MERGED
+    git checkout feature-d
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+
+    # Assertions
+    assert_success
+    assert_output --partial "Parent branch 'feature-b' has been merged"
+    assert_output --partial "Updating parent of 'feature-c' to 'feature-a'"
+    assert_output --partial "Parent branch 'feature-c' has been merged"
+    assert_output --partial "Updating parent of 'feature-d' to 'feature-a'"
+    assert_output --partial "Deleted local branch 'feature-b'"
+    assert_output --partial "Deleted local branch 'feature-c'"
+
+    # --- State Assertions ---
+    assert_branch_parent feature-d feature-a
+    assert_branch_does_not_exist feature-b
+    assert_branch_does_not_exist feature-c
+    assert_branch_exists feature-a
+    assert_branch_exists feature-d
+}
+
+@test "sync: syncs when entire stack is merged" {
+    # Setup
+    create_stack feature-a feature-b
+    git config branch.feature-a.pr-number 10
+    git config branch.feature-b.pr-number 11
+    mock_pr_state 10 MERGED
+    mock_pr_state 11 MERGED
+    git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+    
+    # Assertions
+    assert_success
+    assert_output --partial "All branches in the stack were merged. Nothing left to rebase."
+    assert_output --partial "Deleted local branch 'feature-a'"
+    assert_output --partial "Deleted local branch 'feature-b'"
+    
+    # --- State Assertions ---
+    assert_branch_does_not_exist feature-a
+    assert_branch_does_not_exist feature-b
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "main"
+}
+
+@test "sync: detects merged branch without a PR" {
+    # Setup
+    create_stack feature-a feature-b
+    # Manually merge feature-a into main to simulate a merge without a PR
+    run git checkout main
+    run git merge --no-ff feature-a
+    run git push origin main
+    run git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+
+    # Assertions
+    assert_success
+    assert_output --partial "Parent branch 'feature-a' has been merged."
+    assert_output --partial "Updating parent of 'feature-b' to 'main'"
+
+    # --- State Assertions ---
+    assert_branch_parent feature-b main
+    assert_branch_does_not_exist feature-a
+}
+
