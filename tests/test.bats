@@ -278,3 +278,68 @@ teardown() {
     assert_branch_does_not_exist feature-a
 }
 
+@test "sync: runs correctly when started from the middle of a stack" {
+    # Setup
+    create_stack feature-a feature-b feature-c
+    git config branch.feature-a.pr-number 10
+    mock_pr_state 10 MERGED
+    git checkout feature-b # Start from the middle
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+
+    # Assertions
+    assert_success
+    assert_output --partial "Deleted local branch 'feature-a'"
+
+    # --- State Assertions ---
+    assert_branch_parent feature-b main
+    assert_branch_parent feature-c feature-b
+    assert_branch_does_not_exist feature-a
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-b" # Should return to original branch
+}
+
+@test "sync: runs correctly on a single-branch stack" {
+    # Setup
+    run "$STGIT_CMD" create feature-a
+    run create_commit "commit for feature-a"
+    run git checkout main
+    run create_commit "new base commit"
+    local main_sha; main_sha=$(git rev-parse HEAD)
+    run git push origin main
+    run git checkout feature-a
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+
+    # Assertions
+    assert_success
+    
+    # --- State Assertions ---
+    assert_commit_is_ancestor "$main_sha" feature-a
+    assert_branch_parent feature-a main
+}
+
+@test "sync: does nothing when already up-to-date" {
+    # Setup
+    create_stack feature-a feature-b
+    local sha_a_before; sha_a_before=$(git rev-parse feature-a)
+    local sha_b_before; sha_b_before=$(git rev-parse feature-b)
+    git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+
+    # Assertions
+    assert_success
+    
+    # --- State Assertions ---
+    local sha_a_after; sha_a_after=$(git rev-parse feature-a)
+    local sha_b_after; sha_b_after=$(git rev-parse feature-b)
+    assert_equal "$sha_a_before" "$sha_a_after"
+    assert_equal "$sha_b_before" "$sha_b_after"
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-b"
+}
+
