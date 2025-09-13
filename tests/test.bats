@@ -391,3 +391,142 @@ teardown() {
     assert_output "feature-b"
 }
 
+# --- Tests for 'stgit restack' ---
+@test "restack: rebases child branches after an amend" {
+    # This is the primary use case for `restack`. After amending a commit on a
+    # parent branch, the child branches need to be rebased on top of the new commit.
+    
+    # Setup
+    create_stack feature-a feature-b feature-c
+    run git checkout feature-b
+    # Amend the commit on feature-b
+    run create_commit "new content for b" "amended content" "file-b.txt"
+    run git add .
+    run git commit --amend --no-edit
+    local new_b_sha; new_b_sha=$(git rev-parse HEAD)
+
+    # Action
+    run "$STGIT_CMD" restack
+
+    # Assertions
+    assert_success
+    
+    # --- State Assertions ---
+    # 'feature-c' should now have the amended commit from 'feature-b' in its history.
+    assert_commit_is_ancestor "$new_b_sha" feature-c
+    assert_branch_parent feature-b feature-a
+    assert_branch_parent feature-c feature-b
+}
+
+@test "restack: works when run from the bottom of a stack" {
+    # This test ensures that if you amend the very first branch in a stack,
+    # `restack` will correctly update all subsequent branches.
+    
+    # Setup
+    create_stack feature-a feature-b feature-c
+    run git checkout feature-a
+    run create_commit "new content for a" "amended content" "file-a.txt"
+    run git add .
+    run git commit --amend --no-edit
+    local new_a_sha; new_a_sha=$(git rev-parse HEAD)
+
+    # Action
+    run "$STGIT_CMD" restack
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    assert_commit_is_ancestor "$new_a_sha" feature-b
+    assert_commit_is_ancestor "$new_a_sha" feature-c
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-a" # Should return to original branch
+}
+
+@test "restack: does nothing when at the top of the stack" {
+    # If `restack` is run from the topmost branch, there are no children
+    # to rebase, so it should do nothing and exit gracefully.
+    
+    # Setup
+    create_stack feature-a feature-b
+    local sha_a_before; sha_a_before=$(git rev-parse feature-a)
+    local sha_b_before; sha_b_before=$(git rev-parse feature-b)
+    run git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" restack
+
+    # Assertions
+    assert_success
+    assert_output --partial "You are at the top of the stack. Nothing to restack."
+
+    # --- State Assertions ---
+    # Hashes should not have changed.
+    local sha_a_after; sha_a_after=$(git rev-parse feature-a)
+    local sha_b_after; sha_b_after=$(git rev-parse feature-b)
+    assert_equal "$sha_a_before" "$sha_a_after"
+    assert_equal "$sha_b_before" "$sha_b_after"
+}
+
+@test "restack: handles rebase conflict gracefully" {
+    # Similar to the 'sync' conflict test, this ensures that if a `restack`
+    # operation causes a merge conflict, the script pauses and allows the user
+    # to resolve it manually.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run git checkout feature-b
+    run create_commit "conflicting commit" "line 2" "conflict.txt"
+    run git checkout feature-a
+    # Amend feature-a to create a conflict
+    run create_commit "conflicting amend" "line two" "conflict.txt"
+    run git add .
+    run git commit --amend --no-edit
+
+    # Action
+    run "$STGIT_CMD" restack
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "Rebase conflict detected"
+
+    # --- State Assertions ---
+    assert [ -f ".git/STGIT_OPERATION_STATE" ]
+    run cat ".git/STGIT_OPERATION_STATE"
+    assert_output --partial "COMMAND='restack'"
+    assert_output --partial "ORIGINAL_BRANCH='feature-a'"
+}
+
+@test "restack: 'continue' resumes after a restack conflict" {
+    # This tests the second half of the 'restack' conflict workflow.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run git checkout feature-b
+    run create_commit "conflicting commit" "line 2" "conflict.txt"
+    run git checkout feature-a
+    run create_commit "conflicting amend" "line two" "conflict.txt"
+    run git add .
+    run git commit --amend --no-edit
+    local new_a_sha; new_a_sha=$(git rev-parse HEAD)
+    # Run restack, which is expected to fail
+    run "$STGIT_CMD" restack
+
+    # Manual conflict resolution
+    echo "resolved" > conflict.txt
+    run git add conflict.txt
+    GIT_EDITOR=true run git rebase --continue
+
+    # Action
+    run "$STGIT_CMD" continue
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    refute [ -f ".git/STGIT_OPERATION_STATE" ]
+    assert_commit_is_ancestor "$new_a_sha" feature-b
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-a" # Should return to original branch
+}
+
