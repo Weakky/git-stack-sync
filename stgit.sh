@@ -7,6 +7,7 @@ set -e
 # --- Internal State ---
 STATE_FILE=".git/STGIT_OPERATION_STATE"
 CONFIG_CACHE_FILE=".git/STGIT_CONFIG_CACHE"
+AUTO_CONFIRM=false # Global flag for --yes
 
 # --- Logging Helpers ---
 log_success() {
@@ -236,17 +237,15 @@ _perform_iterative_rebase() {
     local command=$1
     local original_branch=$2
     local merged_branches_to_delete=$3
-    local auto_confirm=$4
     
     # Rebase parameters
-    local new_base=$5
-    shift 5
+    local new_base=$4
+    shift 4
     local branches_to_rebase=("$@")
 
     # Save the state BEFORE starting the potentially failing operation.
     echo "COMMAND='$command'" > "$STATE_FILE"
     echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
-    echo "AUTO_CONFIRM='$auto_confirm'" >> "$STATE_FILE"
     if [[ -n "$merged_branches_to_delete" ]]; then
         echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
     fi
@@ -339,18 +338,19 @@ _finish_operation() {
 
     if [[ "${COMMAND}" == "sync" && -n "${MERGED_BRANCHES_TO_DELETE}" ]]; then
         for branch_to_delete in ${MERGED_BRANCHES_TO_DELETE}; do
-            local do_delete=false
+            local confirmed=false
             if [[ "$AUTO_CONFIRM" == true ]]; then
-                do_delete=true
+                confirmed=true
+            # The prompt is now part of `read -p` and goes to stderr.
+            elif read -r -n 1 -p "❔ Do you want to delete the local merged branch '$branch_to_delete'? (y/N) " REPLY && [[ "$REPLY" =~ ^[Yy]$ ]]; then
+                confirmed=true
+                echo # Add a newline after the user input for cleaner output
             else
-                log_prompt "Do you want to delete the local merged branch '$branch_to_delete'? (y/N)"
-                read -r REPLY
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    do_delete=true
-                fi
+                # Also echo a newline if the user enters 'n' or anything else
+                echo
             fi
 
-            if [[ "$do_delete" == true ]]; then
+            if [[ "$confirmed" == true ]]; then
                 if [[ "$(get_current_branch)" == "$branch_to_delete" ]]; then
                     git checkout "$BASE_BRANCH" >/dev/null 2>&1
                 fi
@@ -455,14 +455,14 @@ cmd_squash() {
 }
 
 cmd_clean() {
-    local auto_confirm=$1
+    log_warning "You are about to permanently delete all stgit metadata for this repository."
+    log_info "This includes the configuration cache and any saved state for interrupted commands."
+    log_info "This will NOT delete your branches or commits."
 
-    if [[ "$auto_confirm" == false ]]; then
-        log_warning "You are about to permanently delete all stgit metadata for this repository."
-        log_info "This includes the configuration cache and any saved state for interrupted commands."
-        log_info "This will NOT delete your branches or commits."
-        log_prompt "Are you sure you want to continue? (y/N)"
-        read -r REPLY
+    if [[ "$AUTO_CONFIRM" != true ]]; then
+        log_prompt "Are you sure you want to continue?"
+        read -p "(y/N) " -n 1 -r
+        echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_warning "Clean cancelled."
             exit 1
@@ -643,7 +643,6 @@ cmd_prev() {
 
 cmd_restack() {
     _guard_on_base_branch "restack"
-    local auto_confirm=$1
     local original_branch
     original_branch=$(get_current_branch)
     log_step "Restacking branches on top of '$original_branch'..."
@@ -663,7 +662,7 @@ cmd_restack() {
     fi
     
     log_info "Detected subsequent stack: ${branches_to_restack[*]}"
-    _perform_iterative_rebase "restack" "$original_branch" "" "$auto_confirm" "$original_branch" "${branches_to_restack[@]}"
+    _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "${branches_to_restack[@]}"
     
     _finish_operation
 }
@@ -687,8 +686,6 @@ cmd_continue() {
 cmd_sync() {
     _guard_on_base_branch "sync"
     check_gh_auth
-    local auto_confirm=$1
-
     local original_branch
     original_branch=$(get_current_branch)
     
@@ -765,12 +762,19 @@ cmd_sync() {
              new_base="origin/$BASE_BRANCH"
         fi
         
-        _perform_iterative_rebase "sync" "$original_branch" "$unique_merged_branches" "$auto_confirm" "$new_base" "${remaining_branches[@]}"
+        _perform_iterative_rebase "sync" "$original_branch" "$unique_merged_branches" "$new_base" "${remaining_branches[@]}"
         
         _finish_operation
 
     else
         log_warning "All branches in the stack were merged. Nothing left to rebase."
+        if [[ -n "$unique_merged_branches" ]]; then
+            # Still need to call finish operation to handle branch deletion prompts.
+            # We save a minimal state file for this purpose.
+            echo "COMMAND='sync'" > "$STATE_FILE"
+            echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
+            echo "MERGED_BRANCHES_TO_DELETE='$unique_merged_branches'" >> "$STATE_FILE"
+        fi
         _finish_operation
     fi
 }
@@ -778,8 +782,6 @@ cmd_sync() {
 
 cmd_push() {
     _guard_on_base_branch "push"
-    local auto_confirm=$1
-    
     log_step "Collecting all branches in the stack..."
     local top_branch
     top_branch=$(get_stack_top)
@@ -802,9 +804,10 @@ cmd_push() {
         log_info "$branch"
     done
     
-    if [[ "$auto_confirm" == false ]]; then
-        log_prompt "Are you sure? (y/N)"
-        read -r REPLY
+    if [[ "$AUTO_CONFIRM" != true ]]; then
+        log_prompt "Are you sure?"
+        read -p "(y/N) " -n 1 -r
+        echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_warning "Push cancelled."
             exit 1
@@ -836,8 +839,6 @@ cmd_pr() {
 cmd_delete() {
     _guard_on_base_branch "delete"
     check_gh_auth
-    local auto_confirm=$1
-    
     local branch_to_delete
     branch_to_delete=$(get_current_branch)
 
@@ -851,10 +852,11 @@ cmd_delete() {
         exit 1
     fi
 
-    if [[ "$auto_confirm" == false ]]; then
-        log_warning "You are about to permanently delete branch '$branch_to_delete'."
-        log_prompt "This action cannot be undone. Are you sure you want to continue? (y/N)"
-        read -r REPLY
+    log_warning "You are about to permanently delete branch '$branch_to_delete'."
+    if [[ "$AUTO_CONFIRM" != true ]]; then
+        log_prompt "This action cannot be undone. Are you sure you want to continue?"
+        read -p "(y/N) " -n 1 -r
+        echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_warning "Deletion cancelled."
             exit 1
@@ -870,11 +872,12 @@ cmd_delete() {
     pr_number=$(get_pr_number "$branch_to_delete")
     if [[ -n "$pr_number" ]]; then
         local close_pr=false
-        if [[ "$auto_confirm" == true ]]; then
+        if [[ "$AUTO_CONFIRM" == true ]]; then
             close_pr=true
         else
-            log_prompt "Do you want to close the associated GitHub PR #${pr_number}? (y/N)"
-            read -r REPLY
+            log_prompt "Do you want to close the associated GitHub PR #${pr_number}?"
+            read -p "(y/N) " -n 1 -r
+            echo
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 close_pr=true
             fi
@@ -1069,7 +1072,11 @@ cmd_status() {
 cmd_help() {
     echo "stgit - A tool for managing stacked Git branches with GitHub integration."
     echo ""
-    echo "Usage: stgit <command> [options]"
+    echo "Usage: stgit [options] <command> [args]"
+    echo ""
+    echo "Options:"
+    echo "  -y, --yes              Automatically answer 'yes' to all prompts."
+    echo "  -h, --help             Show this help message."
     echo ""
     echo "Commands:"
     echo "  amend                  Amend staged changes to the last commit and restack."
@@ -1096,46 +1103,60 @@ cmd_help() {
 }
 
 main() {
-    local cmd=$1
-    shift || true # Shift the command off the argument list
-
-    local auto_confirm=false
-    local other_args=()
-    # Now loop through the remaining arguments to find the global --yes flag
-    for arg in "$@"; do
-      if [[ "$arg" == "-y" || "$arg" == "--yes" ]]; then
-        auto_confirm=true
-      else
-        other_args+=("$arg")
-      fi
+    # --- Argument Parsing ---
+    local command=""
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --yes|-y)
+                AUTO_CONFIRM=true
+                shift # past argument
+                ;;
+            -h|--help)
+                # Handle help immediately and exit
+                cmd_help
+                exit 0
+                ;;
+            *)
+                # If it's not a known global option, it must be the command or an argument.
+                # We assume the first non-option argument is the command.
+                if [[ -z "$command" && ! "$1" =~ ^- ]]; then
+                    command=$1
+                else
+                    args+=("$1")
+                fi
+                shift # past argument
+                ;;
+        esac
     done
-
-    # Re-set the positional parameters to the filtered list
-    set -- "${other_args[@]}"
 
     _initialize_config
 
-    case "$cmd" in
-        amend) cmd_amend "$@";;
-        clean) cmd_clean "$auto_confirm" "$@";;
-        create) cmd_create "$@";;
-        delete) cmd_delete "$auto_confirm" "$@";;
-        insert) cmd_insert "$@";;
-        squash) cmd_squash "$@";;
-        submit) cmd_submit "$@";;
-        sync) cmd_sync "$auto_confirm" "$@";;
-        status) cmd_status "$@";;
-        next) cmd_next "$@";;
-        prev) cmd_prev "$@";;
-        restack) cmd_restack "$auto_confirm" "$@";;
-        continue) cmd_continue "$@";;
-        push) cmd_push "$auto_confirm" "$@";;
-        pr) cmd_pr "$@";;
-        list|ls) cmd_list "$@";;
-        help|--help|-h) cmd_help;;
-        "") cmd_help;;
+    # --- Command Dispatch ---
+    case "$command" in
+        amend) cmd_amend "${args[@]}";;
+        clean) cmd_clean "${args[@]}";;
+        create) cmd_create "${args[@]}";;
+        delete) cmd_delete "${args[@]}";;
+        insert) cmd_insert "${args[@]}";;
+        squash) cmd_squash "${args[@]}";;
+        submit) cmd_submit "${args[@]}";;
+        sync) cmd_sync "${args[@]}";;
+        status) cmd_status "${args[@]}";;
+        next) cmd_next "${args[@]}";;
+        prev) cmd_prev "${args[@]}";;
+        restack) cmd_restack "${args[@]}";;
+        continue) cmd_continue "${args[@]}";;
+        push) cmd_push "${args[@]}";;
+        pr) cmd_pr "${args[@]}";;
+        list|ls) cmd_list "${args[@]}";;
+        help) cmd_help;; # Explicitly handle 'help' command
+        "")
+            # If no command was given, but flags might have been, default to showing help.
+            cmd_help
+            ;;
         *)
-            log_error "Unknown command: $cmd"
+            log_error "Unknown command: $command"
             cmd_help
             exit 1
             ;;
