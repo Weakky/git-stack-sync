@@ -4,16 +4,6 @@
 
 set -e
 
-# --- Configuration ---
-# The base branch against which stacks are created and PRs are targeted.
-# You can change this to 'main', 'master', or your project's default branch.
-BASE_BRANCH="main"
-
-# --- GitHub Configuration ---
-# IMPORTANT: You must change these to your own GitHub username/org and repo name.
-GH_USER="weakky"
-GH_REPO="stack-branch-test"
-
 # --- Internal State ---
 STATE_FILE=".git/STGIT_OPERATION_STATE"
 
@@ -57,6 +47,36 @@ if ! command -v jq &> /dev/null; then
     log_info "Please install it to parse API responses: https://stedolan.github.io/jq/"
     exit 1
 fi
+
+# --- Auto-Configuration ---
+# These variables are now determined automatically.
+BASE_BRANCH=""
+GH_USER=""
+GH_REPO=""
+
+_initialize_config() {
+    local repo_info
+    # Attempt to get repo info from the GitHub CLI.
+    # The '2>/dev/null' suppresses gh's errors so we can provide our own.
+    if ! repo_info=$(gh repo view --json owner,name,defaultBranchRef --jq '{owner: .owner.login, name: .name, base: .defaultBranchRef.name}' 2>/dev/null); then
+        log_error "Could not determine GitHub repository context."
+        log_info "Please ensure you are inside a Git repository with a remote named 'origin' pointing to GitHub, and that you have run 'gh auth login'."
+        exit 1
+    fi
+
+    # Use JQ to parse the JSON and export variables
+    GH_USER=$(echo "$repo_info" | jq -r '.owner')
+    GH_REPO=$(echo "$repo_info" | jq -r '.name')
+    BASE_BRANCH=$(echo "$repo_info" | jq -r '.base')
+
+    # Validate that all variables were parsed correctly.
+    if [[ -z "$GH_USER" || "$GH_USER" == "null" || -z "$GH_REPO" || "$GH_REPO" == "null" || -z "$BASE_BRANCH" || "$BASE_BRANCH" == "null" ]]; then
+        log_error "Failed to parse repository details from GitHub."
+        log_info "Please check your 'gh' CLI authentication and repository configuration."
+        exit 1
+    fi
+}
+
 
 # --- Internal Functions ---
 
@@ -1001,6 +1021,8 @@ cmd_help() {
 main() {
     local cmd=$1
     shift || true
+
+    _initialize_config
 
     case "$cmd" in
         amend) cmd_amend "$@";;
