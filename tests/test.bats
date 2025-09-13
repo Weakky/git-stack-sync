@@ -188,15 +188,20 @@ teardown() {
     run git push origin main
     run git checkout feature-a
     # Run sync, which is expected to fail
-    run "$STGIT_CMD" sync --yes
+    run "$STGIT_CMD" sync
 
     # Manual conflict resolution
     echo "resolved" > file.txt
     git add file.txt
-    git rebase --continue >/dev/null
+    
+    # By default, a successful rebase opens an editor for the commit message.
+    # In a non-interactive test, this would hang. GIT_EDITOR=true tells Git
+    # to use the 'true' command as its editor, which does nothing and exits
+    # successfully, allowing the rebase to complete automatically.
+    GIT_EDITOR=true git rebase --continue >/dev/null
 
     # Action
-    run "$STGIT_CMD" continue
+    run "$STGIT_CMD" continue --yes
 
     # Assertions
     assert_success
