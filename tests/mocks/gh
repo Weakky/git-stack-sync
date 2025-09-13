@@ -1,45 +1,27 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# A mock for the 'gh' command-line tool.
-# This script intercepts calls made by stgit during tests to prevent
-# real network requests and provide controlled, predictable responses.
+# This is a mock of the 'gh' CLI for testing purposes.
 
-# The first argument is the command (e.g., "auth", "repo", "pr")
-COMMAND="$1"
-shift
+# --- MOCK BEHAVIOR ---
+# This mock simulates the behavior of the 'gh' command by checking its arguments
+# and printing the expected JSON output for different scenarios.
 
-case "$COMMAND" in
-  auth)
-    if [[ "$1" == "status" ]]; then
-      # Simulate a successful login
-      exit 0
-    fi
-    ;;
-  repo)
-    if [[ "$1" == "view" ]]; then
-      # Simulate the output of `gh repo view` for auto-configuration.
-      # This provides a predictable environment for all tests.
-      echo '{
-        "owner": {
-          "login": "test-owner"
-        },
+if [[ "$1" == "repo" && "$2" == "view" ]]; then
+    # Simulate the command: gh repo view --json ... --jq ...
+    # The key is to return the JSON *after* the --jq filter has been applied,
+    # as this is what the stgit script expects to receive.
+    echo '{
+        "owner": "test-user",
         "name": "test-repo",
-        "defaultBranchRef": {
-          "name": "main"
-        }
-      }'
-      exit 0
-    fi
-    ;;
-  pr)
-     # This can be expanded to simulate `gh pr view`, `gh pr close`, etc.
-     # For now, we just acknowledge the command.
-     echo "Mocked gh pr command with args: $*"
-     exit 0
-    ;;
-esac
+        "base": "main"
+    }'
+    exit 0
+elif [[ "$1" == "auth" && "$2" == "status" ]]; then
+    # Simulate a successful login status.
+    exit 0
+fi
 
-# If an unknown command is called, print an error to the test output
-# so we know we need to update the mock.
-echo "Error: Unhandled mock gh command: $COMMAND $*" >&2
+# If the command is not one of the mocked ones, exit with an error.
+echo "Error: Unmocked gh command received by mock: gh $*" >&2
 exit 1
+
