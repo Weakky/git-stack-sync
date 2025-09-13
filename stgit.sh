@@ -444,6 +444,31 @@ cmd_squash() {
     fi
 }
 
+cmd_clean() {
+    log_warning "You are about to permanently delete all stgit metadata for this repository."
+    log_info "This includes the configuration cache and any saved state for interrupted commands."
+    log_info "This will NOT delete your branches or commits."
+    log_prompt "Are you sure you want to continue?"
+    read -p "(y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_warning "Clean cancelled."
+        exit 1
+    fi
+
+    log_step "Cleaning stgit metadata..."
+    if [[ -f "$CONFIG_CACHE_FILE" ]]; then
+        rm -f "$CONFIG_CACHE_FILE"
+        log_info "Removed configuration cache."
+    fi
+    if [[ -f "$STATE_FILE" ]]; then
+        rm -f "$STATE_FILE"
+        log_info "Removed operation state file."
+    fi
+    log_success "Clean complete. Configuration will be re-initialized on the next run."
+}
+
+
 cmd_create() {
     if [[ -z "$1" ]]; then
         log_error "Branch name is required."
@@ -1018,6 +1043,7 @@ cmd_help() {
     echo ""
     echo "Commands:"
     echo "  amend                  Amend staged changes to the last commit and restack."
+    echo "  clean                  Remove all stgit metadata from the repository."
     echo "  create <branch-name>   Create a new branch on top of the current one."
     echo "  delete                 Delete the current branch and repair the stack."
     echo "  insert [--before] <branch-name>"
@@ -1048,6 +1074,7 @@ main() {
 
     case "$cmd" in
         amend) cmd_amend "$@";;
+        clean) cmd_clean "$@";;
         create) cmd_create "$@";;
         delete) cmd_delete "$@";;
         insert) cmd_insert "$@";;
@@ -1073,3 +1100,4 @@ main() {
 }
 
 main "$@"
+
