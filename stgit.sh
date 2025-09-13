@@ -705,23 +705,26 @@ cmd_sync() {
         return
     fi
 
-    local merged_branches_to_delete=()
-
-    # New logic: Iterate through each branch in the stack and check its own status.
+    local merged_branches=()
+    local unmerged_branches=()
+    
+    # First pass: identify all merged branches in the stack
     for branch in "${stack_branches[@]}"; do
+        local is_merged=false
         local pr_number
         pr_number=$(get_pr_number "$branch")
-        local is_merged=false
 
         if [[ -n "$pr_number" ]]; then
             log_info "Checking status of PR #${pr_number} for branch '$branch'..."
             local pr_state
             pr_state=$(gh pr view "$pr_number" --json state --jq .state 2>/dev/null || echo "NOT_FOUND")
-            if [[ "$pr_state" == "MERGED" ]]; then is_merged=true; fi
+            if [[ "$pr_state" == "MERGED" ]]; then
+                is_merged=true
+            fi
         fi
         
-        # Fallback check if no PR is found or PR is not merged yet
         if [[ "$is_merged" == false ]]; then
+            # Fallback for branches merged without a PR
             if git merge-base --is-ancestor "$branch" "origin/$BASE_BRANCH"; then
                 is_merged=true
             fi
@@ -729,52 +732,43 @@ cmd_sync() {
 
         if [[ "$is_merged" == true ]]; then
             log_success "Branch '$branch' has been merged."
-            local child
-            child=$(get_child_branch "$branch")
-            local parent
-            parent=$(get_parent_branch "$branch")
-            if [[ -z "$parent" ]]; then parent="$BASE_BRANCH"; fi
-
-            if [[ -n "$child" ]]; then
-                log_info "Updating parent of '$child' to '$parent'."
-                set_parent_branch "$child" "$parent"
-            fi
-            
-            merged_branches_to_delete+=("$branch")
+            merged_branches+=("$branch")
+        else
+            unmerged_branches+=("$branch")
         fi
     done
 
-    local remaining_branches=()
-    for branch in "${stack_branches[@]}"; do
-        if [[ ! " ${merged_branches_to_delete[*]} " =~ " ${branch} " ]]; then
-            remaining_branches+=("$branch")
+    # Second pass: Update parentage of remaining branches
+    local last_unmerged_ancestor="$BASE_BRANCH"
+    for branch in "${unmerged_branches[@]}"; do
+        local original_parent
+        original_parent=$(get_parent_branch "$branch")
+        
+        # If the original parent was merged, we need to find the new parent.
+        # Otherwise, the new parent is the last unmerged branch we've seen.
+        if [[ " ${merged_branches[*]} " =~ " ${original_parent} " ]]; then
+            log_info "Updating parent of '$branch' to '$last_unmerged_ancestor'."
+            set_parent_branch "$branch" "$last_unmerged_ancestor"
         fi
+        last_unmerged_ancestor="$branch"
     done
-    local unique_merged_branches
-    unique_merged_branches=$(echo "${merged_branches_to_delete[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
 
-    if [ ${#remaining_branches[@]} -gt 0 ]; then
-        local new_bottom_branch="${remaining_branches[0]}"
+    # Third pass: Rebase the remaining (unmerged) stack
+    if [ ${#unmerged_branches[@]} -gt 0 ]; then
         log_step "Rebasing remaining stack onto '$BASE_BRANCH'..."
         
-        local new_base
-        new_base=$(get_parent_branch "$new_bottom_branch")
-        if [[ -z "$new_base" || "$new_base" == "$BASE_BRANCH" ]]; then
-             new_base="origin/$BASE_BRANCH"
-        fi
+        local new_base="origin/$BASE_BRANCH"
         
-        _perform_iterative_rebase "sync" "$original_branch" "$unique_merged_branches" "$new_base" "${remaining_branches[@]}"
+        _perform_iterative_rebase "sync" "$original_branch" "${merged_branches[*]}" "$new_base" "${unmerged_branches[@]}"
         
         _finish_operation
 
     else
         log_warning "All branches in the stack were merged. Nothing left to rebase."
-        if [[ -n "$unique_merged_branches" ]]; then
-            # Still need to call finish operation to handle branch deletion prompts.
-            # We save a minimal state file for this purpose.
+        if [[ ${#merged_branches[@]} -gt 0 ]]; then
             echo "COMMAND='sync'" > "$STATE_FILE"
             echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
-            echo "MERGED_BRANCHES_TO_DELETE='$unique_merged_branches'" >> "$STATE_FILE"
+            echo "MERGED_BRANCHES_TO_DELETE='${merged_branches[*]}'" >> "$STATE_FILE"
         fi
         _finish_operation
     fi
