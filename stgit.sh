@@ -9,6 +9,11 @@ STATE_FILE=".git/STGIT_OPERATION_STATE"
 CONFIG_CACHE_FILE=".git/STGIT_CONFIG_CACHE"
 AUTO_CONFIRM=false # Global flag for --yes
 
+# --- Color Constants ---
+C_RED='\033[0;31m'
+C_YELLOW='\033[0;33m'
+C_RESET='\033[0m'
+
 # --- Logging Helpers ---
 log_success() {
     echo "🟢 $1"
@@ -579,21 +584,34 @@ cmd_squash() {
     fi
 
     # --- Confirmation Prompt ---
+    local stack_before=()
+    local temp_branch=$(get_stack_top)
+    while [[ -n "$temp_branch" && "$temp_branch" != "$BASE_BRANCH" ]]; do
+        stack_before=("$temp_branch" "${stack_before[@]}")
+        temp_branch=$(get_parent_branch "$temp_branch")
+    done
+
     echo ""
     log_step "Squashing '$branch_to_squash' into '$target_branch'..."
     echo "   Stack Before:"
-    # This is a simplified visualization. A real one might be more complex.
-    log_info "     - $parent_branch"
-    log_info "     - $current_branch"
-    log_info "     - $child_branch"
+    for branch in "${stack_before[@]}"; do
+        if [[ "$branch" == "$branch_to_squash" ]]; then
+            log_info "     - ${C_RED}${branch}${C_RESET}  <-- to be squashed and deleted"
+        else
+            log_info "     - $branch"
+        fi
+    done
+
     echo "   Stack After:"
-    if [[ "$direction" == "parent" ]]; then
-        log_info "     - $parent_branch (will contain commits from $current_branch)"
-        log_info "     - $child_branch"
-    else # child
-        log_info "     - $parent_branch"
-        log_info "     - $current_branch (will contain commits from $child_branch)"
-    fi
+    for branch in "${stack_before[@]}"; do
+        if [[ "$branch" == "$branch_to_squash" ]]; then
+            continue # Skip the deleted branch
+        elif [[ "$branch" == "$target_branch" ]]; then
+            log_info "     - ${C_YELLOW}${branch}${C_RESET} <-- will contain commits from '$branch_to_squash'"
+        else
+            log_info "     - $branch"
+        fi
+    done
     echo ""
 
     if [[ "$AUTO_CONFIRM" != true ]]; then
@@ -626,6 +644,10 @@ cmd_squash() {
     fi
 
     log_success "Successfully squashed '$branch_to_squash' into '$target_branch'."
+    
+    if [[ -n "$grand_child" ]]; then
+        log_suggestion "Run 'stgit restack' to update descendant branches."
+    fi
 }
 
 
@@ -1349,3 +1371,4 @@ main() {
 }
 
 main "$@"
+
