@@ -1050,7 +1050,6 @@ cmd_help() {
     echo "                         Insert a new branch. By default, inserts after the"
     echo "                         current branch. Use --before to insert before it."
     echo "  list|ls                List all available stacks."
-    echo "  move <up|down>         Move the current branch up or down within the stack."
     echo "  squash                 Squash commits on the current branch and restack."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
@@ -1100,3 +1099,4 @@ main() {
 }
 
 main "$@"
+
