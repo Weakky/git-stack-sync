@@ -975,6 +975,7 @@ teardown() {
     mock_pr_state 10 OPEN
     mock_pr_state 11 OPEN
     run "$STGIT_CMD" push --yes
+    run git checkout feature-a # Explicitly checkout the branch to test
     local shas_before; shas_before=$(get_all_branch_shas)
 
     # Action
