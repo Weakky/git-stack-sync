@@ -80,6 +80,12 @@ create_stack() {
     run git checkout "$parent"
 }
 
+# Returns a sorted list of all local branches and their current commit SHAs.
+# This provides a reliable "snapshot" of the repository state.
+get_all_branch_shas() {
+    git for-each-ref --format='%(refname:short) %(objectname)' refs/heads | sort
+}
+
 # --- Custom State Assertions ---
 
 # Asserts that a branch's parent is set to a specific branch in stgit config.

@@ -963,3 +963,133 @@ teardown() {
     assert_branch_has_no_pr_number feature-a
 }
 
+# --- Tests for 'stgit status' ---
+@test "status: displays a clean, up-to-date stack" {
+    # This tests the ideal state: all local branches are synced with their
+    # parents and remotes, and all have open PRs.
+    
+    # Setup
+    create_stack feature-a feature-b
+    git config branch.feature-a.pr-number 10
+    git config branch.feature-b.pr-number 11
+    mock_pr_state 10 OPEN
+    mock_pr_state 11 OPEN
+    run "$STGIT_CMD" push --yes
+    local shas_before; shas_before=$(get_all_branch_shas)
+
+    # Action
+    run "$STGIT_CMD" status
+
+    # Assertions
+    assert_success
+    assert_output --partial "feature-a *"
+    assert_output --partial "Status: 🟢 Synced"
+    assert_output --partial "PR:     🟢 #10: OPEN"
+    assert_output --partial "feature-b"
+    assert_output --partial "Status: 🟢 Synced"
+    assert_output --partial "PR:     🟢 #11: OPEN"
+    assert_output --partial "Stack is up to date"
+
+    # --- State Assertions ---
+    local shas_after; shas_after=$(get_all_branch_shas)
+    assert_equal "$shas_before" "$shas_after"
+}
+
+@test "status: indicates when a branch needs to be pushed" {
+    # This tests the state where a local branch has commits that are not
+    # yet on the remote.
+    
+    # Setup
+    create_stack feature-a
+    local shas_before; shas_before=$(get_all_branch_shas)
+
+    # Action
+    run "$STGIT_CMD" status
+
+    # Assertions
+    assert_success
+    assert_output --partial "Status: ⚪ Not on remote"
+    assert_output --partial "PR:     ⚪ No PR submitted"
+    assert_output --partial "Run 'stgit push' to update the remote."
+
+    # --- State Assertions ---
+    local shas_after; shas_after=$(get_all_branch_shas)
+    assert_equal "$shas_before" "$shas_after"
+}
+
+@test "status: indicates when stack is behind the base branch" {
+    # This tests the state where `main` has new commits, and the stack needs
+    # to be synced.
+    
+    # Setup
+    create_stack feature-a
+    run git checkout main
+    run create_commit "new commit on main"
+    run git push origin main
+    run git checkout feature-a
+    local shas_before; shas_before=$(get_all_branch_shas)
+
+    # Action
+    run "$STGIT_CMD" status
+
+    # Assertions
+    assert_success
+    assert_output --partial "Status: 🟡 Behind 'main'"
+    assert_output --partial "Run 'stgit sync' to update the entire stack."
+
+    # --- State Assertions ---
+    local shas_after; shas_after=$(get_all_branch_shas)
+    assert_equal "$shas_before" "$shas_after"
+}
+
+@test "status: indicates when a branch is behind its parent" {
+    # This tests the state where a parent branch in the stack has been
+    # amended, and its children need to be restacked.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run git checkout feature-a
+    run create_commit "amend commit" "content" "file.txt"
+    run git commit --amend --no-edit
+    run git checkout feature-b
+    local shas_before; shas_before=$(get_all_branch_shas)
+
+    # Action
+    run "$STGIT_CMD" status
+
+    # Assertions
+    assert_success
+    assert_output --partial "feature-b *"
+    assert_output --partial "Status: 🟡 Behind 'feature-a'"
+    assert_output --partial "Run 'stgit restack' from the out-of-date branch"
+
+    # --- State Assertions ---
+    local shas_after; shas_after=$(get_all_branch_shas)
+    assert_equal "$shas_before" "$shas_after"
+}
+
+@test "status: displays merged and closed PRs" {
+    # This test ensures the status correctly reflects when PRs have been
+    # merged or closed on GitHub.
+    
+    # Setup
+    create_stack feature-a feature-b
+    git config branch.feature-a.pr-number 10
+    git config branch.feature-b.pr-number 11
+    mock_pr_state 10 MERGED
+    mock_pr_state 11 CLOSED
+    local shas_before; shas_before=$(get_all_branch_shas)
+
+    # Action
+    run "$STGIT_CMD" status
+
+    # Assertions
+    assert_success
+    assert_output --partial "PR:     🟣 #10: MERGED"
+    assert_output --partial "PR:     🔴 #11: CLOSED"
+
+    # --- State Assertions ---
+    local shas_after; shas_after=$(get_all_branch_shas)
+    assert_equal "$shas_before" "$shas_after"
+}
+
