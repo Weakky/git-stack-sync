@@ -156,6 +156,60 @@ teardown() {
     assert_branch_exists feature-b
 }
 
+@test "sync: full workflow after a squash merge" {
+    # This is an end-to-end test that covers the most common, complex workflow:
+    # 1. A parent branch is squash-merged via the GitHub UI.
+    # 2. `stgit status` correctly diagnoses the stale stack and prescribes `stgit sync`.
+    # 3. `stgit sync` correctly updates the local base branch and the stack.
+    # 4. `stgit status` now correctly prescribes `stgit push`.
+    # 5. `stgit push` updates the remote.
+    # 6. `stgit status` confirms the stack is fully clean.
+    
+    # Setup
+    create_stack br1 br2
+    git config branch.br1.pr-number 10
+    mock_pr_state 10 MERGED
+    run git checkout main
+    run git merge --squash br1
+    run git commit -m "Squash merge of br1"
+    run git push origin main
+    local new_main_sha; new_main_sha=$(git rev-parse HEAD)
+    run git checkout br2
+
+    # 1. First status check: Diagnose the problem
+    run "$STGIT_CMD" status
+    assert_success
+    assert_output --partial "main (🟡 Behind by 1)"
+    assert_output --partial "PR:     🟣 #10: MERGED"
+    assert_output --partial "Run 'stgit sync' to clean up and rebase the stack"
+
+    # 2. Run sync to fix the stack
+    run "$STGIT_CMD" sync --yes
+    assert_success
+    assert_output --partial "Deleted local branch 'br1'"
+    assert_output --partial "Next step: Run 'stgit push'"
+    assert_branch_parent br2 main
+    assert_commit_is_ancestor "$new_main_sha" br2
+
+    # 3. Second status check: Diagnose the next step
+    run "$STGIT_CMD" status
+    assert_success
+    assert_output --partial "Status: 🟡 Needs push (local history has changed)"
+    assert_output --partial "Run 'stgit push' to update the remote"
+    
+    # 4. Push the changes
+    run "$STGIT_CMD" push --yes
+    assert_success
+    assert_remote_branch_matches_local br2
+
+    # 5. Final status check: Confirm everything is clean
+    run "$STGIT_CMD" status
+    assert_success
+    assert_output --partial "Status: 🟢 Synced"
+    assert_output --partial "Stack is up to date"
+}
+
+
 @test "sync: avoids conflicts when parent was squash-merged" {
     # This tests a critical real-world scenario. If a parent branch (`br1`) is
     # squash-merged into `main`, its commits are squashed into a new commit on `main`.
@@ -1099,9 +1153,9 @@ teardown() {
     assert_equal "$shas_before" "$shas_after"
 }
 
-@test "status: displays merged and closed PRs" {
+@test "status: displays merged and closed PRs and suggests sync" {
     # This test ensures the status correctly reflects when PRs have been
-    # merged or closed on GitHub.
+    # merged or closed on GitHub, and that it gives the correct summary.
     
     # Setup
     create_stack feature-a feature-b
@@ -1118,6 +1172,7 @@ teardown() {
     assert_success
     assert_output --partial "PR:     🟣 #10: MERGED"
     assert_output --partial "PR:     🔴 #11: CLOSED"
+    assert_output --partial "Run 'stgit sync' to clean up and rebase the stack"
 
     # --- State Assertions ---
     local shas_after; shas_after=$(get_all_branch_shas)
