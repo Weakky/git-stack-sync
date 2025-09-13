@@ -239,6 +239,50 @@ _perform_iterative_rebase() {
     done
 }
 
+# Internal helper to handle the complex logic of reparenting, rebasing a sub-stack, and updating PRs.
+_rebase_sub_stack_and_update_pr() {
+    local new_parent_branch=$1
+    local child_branch_to_reparent=$2
+
+    if [[ -z "$child_branch_to_reparent" ]]; then
+        return 0 # Nothing to do
+    fi
+
+    log_step "Rebasing descendant branches onto '$new_parent_branch'..."
+    
+    local sub_stack=()
+    local current_sub_branch="$child_branch_to_reparent"
+    while [[ -n "$current_sub_branch" ]]; do
+        sub_stack+=("$current_sub_branch")
+        current_sub_branch=$(get_child_branch "$current_sub_branch")
+    done
+
+    local new_rebase_base="$new_parent_branch"
+    for branch_to_rebase in "${sub_stack[@]}"; do
+        log_info "Rebasing '$branch_to_rebase'..."
+        git checkout "$branch_to_rebase" >/dev/null 2>&1
+        git rebase "$new_rebase_base" >/dev/null 2>&1
+        new_rebase_base="$branch_to_rebase"
+    done
+    log_success "Sub-stack successfully rebased."
+
+    set_parent_branch "$child_branch_to_reparent" "$new_parent_branch"
+    log_success "Updated parent of '$child_branch_to_reparent' to be '$new_parent_branch'."
+    
+    local pr_to_update
+    pr_to_update=$(get_pr_number "$child_branch_to_reparent")
+    if [[ -n "$pr_to_update" ]]; then
+        log_step "Updating GitHub PR for '$child_branch_to_reparent'..."
+        log_info "Pushing new branch '$new_parent_branch' to remote..."
+        git push origin "$new_parent_branch" >/dev/null 2>&1
+
+        log_info "Setting base of PR #${pr_to_update} to '$new_parent_branch'..."
+        gh_api_call "PATCH" "pulls/${pr_to_update}" "base=$new_parent_branch" >/dev/null
+        log_success "GitHub PR #${pr_to_update} updated."
+    fi
+}
+
+
 # Internal function to finalize an operation, called by successful commands AND by 'continue'.
 _finish_operation() {
     if [ ! -f "$STATE_FILE" ]; then
@@ -301,61 +345,54 @@ cmd_create() {
 
 cmd_insert() {
     check_gh_auth
+    local before_flag=false
+    if [[ "$1" == "--before" ]]; then
+        before_flag=true
+        shift # remove --before from the arguments
+    fi
+
     if [[ -z "$1" ]]; then
         log_error "Branch name is required."
-        log_info "Usage: stgit insert <branch-name>"
+        log_info "Usage: stgit insert [--before] <branch-name>"
         exit 1
     fi
+    local new_branch_name=$1
 
-    local new_branch=$1
-    local parent_branch
-    parent_branch=$(get_current_branch)
+    local insertion_point_branch=""
+    local branch_to_reparent=""
+    local current_branch
+    current_branch=$(get_current_branch)
 
-    local original_child
-    original_child=$(get_child_branch "$parent_branch")
-
-    log_step "Creating new branch '$new_branch'..."
-    git checkout -b "$new_branch" >/dev/null 2>&1
-    set_parent_branch "$new_branch" "$parent_branch"
-    log_success "Created branch '$new_branch' on top of '$parent_branch'."
-
-    if [[ -n "$original_child" ]]; then
-        log_step "Rebasing descendant branches onto '$new_branch'..."
-        
-        local sub_stack=()
-        local current_sub_branch="$original_child"
-        while [[ -n "$current_sub_branch" ]]; do
-            sub_stack+=("$current_sub_branch")
-            current_sub_branch=$(get_child_branch "$current_sub_branch")
-        done
-
-        local new_base="$new_branch"
-        for branch in "${sub_stack[@]}"; do
-            log_info "Rebasing '$branch'..."
-            git checkout "$branch" >/dev/null 2>&1
-            git rebase "$new_base" >/dev/null 2>&1
-            new_base="$branch"
-        done
-
-        set_parent_branch "$original_child" "$new_branch"
-        log_success "Updated parent of '$original_child' to be '$new_branch'."
-        
-        local pr_number_to_update
-        pr_number_to_update=$(get_pr_number "$original_child")
-        if [[ -n "$pr_number_to_update" ]]; then
-            log_step "Updating GitHub PR for '$original_child'..."
-            log_info "Pushing new branch '$new_branch' to remote..."
-            git push origin "$new_branch" >/dev/null 2>&1
-
-            log_info "Setting base of PR #${pr_number_to_update} to '$new_branch'..."
-            gh_api_call "PATCH" "pulls/${pr_number_to_update}" "base=$new_branch" >/dev/null
-            log_success "GitHub PR #${pr_number_to_update} updated."
+    if [[ "$before_flag" == true ]]; then
+        if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+            log_error "Cannot use --before flag when on the base branch."
+            exit 1
         fi
-        
-        git checkout "$new_branch" >/dev/null 2>&1
+        insertion_point_branch=$(get_parent_branch "$current_branch")
+        if [[ -z "$insertion_point_branch" ]]; then
+            log_error "Cannot determine parent of '$current_branch'. Is it part of a stack?"
+            exit 1
+        fi
+        branch_to_reparent="$current_branch"
+        log_step "Preparing to insert '$new_branch_name' before '$current_branch'..."
+    else # Default "after" logic
+        insertion_point_branch="$current_branch"
+        branch_to_reparent=$(get_child_branch "$current_branch")
+        log_step "Preparing to insert '$new_branch_name' after '$current_branch'..."
     fi
 
-    log_success "Successfully inserted '$new_branch' into the stack."
+    # Core logic for creating the branch
+    git checkout "$insertion_point_branch" >/dev/null 2>&1
+    git checkout -b "$new_branch_name" >/dev/null 2>&1
+    
+    set_parent_branch "$new_branch_name" "$insertion_point_branch"
+    log_success "Created branch '$new_branch_name' on top of '$insertion_point_branch'."
+
+    # Delegate reparenting, rebasing, and PR updates to the helper
+    _rebase_sub_stack_and_update_pr "$new_branch_name" "$branch_to_reparent"
+
+    git checkout "$new_branch_name" >/dev/null 2>&1
+    log_success "Successfully inserted '$new_branch_name' into the stack."
     log_suggestion "Add commits, then run 'stgit submit' to create a PR."
 }
 
@@ -765,7 +802,9 @@ cmd_help() {
     echo ""
     echo "Commands:"
     echo "  create <branch-name>   Create a new branch on top of the current one."
-    echo "  insert <branch-name>   Create and insert a new branch, updating GitHub PRs."
+    echo "  insert [--before] <branch-name>"
+    echo "                         Insert a new branch. By default, inserts after the"
+    echo "                         current branch. Use --before to insert before it."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
@@ -806,6 +845,3 @@ main() {
             ;;
     esac
 }
-
-main "$@"
-
