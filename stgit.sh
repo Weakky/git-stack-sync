@@ -328,17 +328,24 @@ _finish_operation() {
     log_suggestion "Run 'stgit push' to update your remote branches."
 }
 
+# A centralized guard for commands that should not be run on the base branch.
+_guard_on_base_branch() {
+    local command_name=$1
+    if [[ "$(get_current_branch)" == "$BASE_BRANCH" ]]; then
+        log_error "The '$command_name' command cannot be run from the base branch ('$BASE_BRANCH')."
+        log_info "It must be run from within a stack."
+        cmd_list # Call the list command to provide context
+        exit 1
+    fi
+}
+
 
 # --- CLI Commands ---
 
 cmd_amend() {
+    _guard_on_base_branch "amend"
     local current_branch
     current_branch=$(get_current_branch)
-
-    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-        log_error "Cannot amend on the base branch ('$BASE_BRANCH')."
-        exit 1
-    fi
 
     # Check if there are any changes (staged or unstaged)
     if [[ -z $(git status --porcelain) ]]; then
@@ -362,13 +369,9 @@ cmd_amend() {
 }
 
 cmd_squash() {
+    _guard_on_base_branch "squash"
     local current_branch
     current_branch=$(get_current_branch)
-
-    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-        log_error "Cannot squash on the base branch ('$BASE_BRANCH')."
-        exit 1
-    fi
 
     local parent
     parent=$(get_parent_branch "$current_branch")
@@ -442,10 +445,7 @@ cmd_insert() {
     current_branch=$(get_current_branch)
 
     if [[ "$before_flag" == true ]]; then
-        if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-            log_error "Cannot use --before flag when on the base branch."
-            exit 1
-        fi
+        _guard_on_base_branch "insert --before"
         insertion_point_branch=$(get_parent_branch "$current_branch")
         if [[ -z "$insertion_point_branch" ]]; then
             log_error "Cannot determine parent of '$current_branch'. Is it part of a stack?"
@@ -475,6 +475,7 @@ cmd_insert() {
 }
 
 cmd_submit() {
+    _guard_on_base_branch "submit"
     check_gh_auth
     log_step "Syncing stack with GitHub..."
     
@@ -534,14 +535,9 @@ cmd_submit() {
 
 
 cmd_next() {
+    _guard_on_base_branch "next"
     local current_branch
     current_branch=$(get_current_branch)
-
-    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-        log_error "You are on the base branch ('$BASE_BRANCH'). Cannot go 'next'."
-        log_info "There could be multiple stacks. Please 'git checkout' a specific branch first."
-        return
-    fi
     
     local child_branch
     child_branch=$(get_child_branch "$current_branch")
@@ -555,13 +551,9 @@ cmd_next() {
 }
 
 cmd_prev() {
+    _guard_on_base_branch "prev"
     local current_branch
     current_branch=$(get_current_branch)
-
-    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-        log_error "You are on the base branch ('$BASE_BRANCH'). Cannot go 'prev'."
-        return
-    fi
     
     local parent
     parent=$(get_parent_branch "$current_branch")
@@ -575,6 +567,7 @@ cmd_prev() {
 }
 
 cmd_restack() {
+    _guard_on_base_branch "restack"
     local original_branch
     original_branch=$(get_current_branch)
     log_step "Restacking branches on top of '$original_branch'..."
@@ -616,6 +609,7 @@ cmd_continue() {
 
 
 cmd_sync() {
+    _guard_on_base_branch "sync"
     check_gh_auth
     local original_branch
     original_branch=$(get_current_branch)
@@ -705,6 +699,7 @@ cmd_sync() {
 
 
 cmd_push() {
+    _guard_on_base_branch "push"
     log_step "Collecting all branches in the stack..."
     local top_branch
     top_branch=$(get_stack_top)
@@ -741,6 +736,7 @@ cmd_push() {
 }
 
 cmd_pr() {
+    _guard_on_base_branch "pr"
     check_gh_auth
     local current_branch
     current_branch=$(get_current_branch)
@@ -757,14 +753,10 @@ cmd_pr() {
 }
 
 cmd_delete() {
+    _guard_on_base_branch "delete"
     check_gh_auth
     local branch_to_delete
     branch_to_delete=$(get_current_branch)
-
-    if [[ "$branch_to_delete" == "$BASE_BRANCH" ]]; then
-        log_error "Cannot delete the base branch ('$BASE_BRANCH')."
-        exit 1
-    fi
 
     local parent
     parent=$(get_parent_branch "$branch_to_delete")
@@ -810,30 +802,39 @@ cmd_delete() {
     log_success "Branch '$branch_to_delete' deleted successfully."
 }
 
+cmd_list() {
+    log_step "Finding all available stacks..."
+    
+    local bottoms
+    bottoms=($(get_all_stack_bottoms))
+    
+    if [ ${#bottoms[@]} -eq 0 ]; then
+        log_warning "No stgit stacks found."
+        log_suggestion "Run 'stgit create <branch-name>' from '$BASE_BRANCH' to start a new stack."
+        return
+    fi
+
+    log_success "Found ${#bottoms[@]} stack(s):"
+    for bottom in "${bottoms[@]}"; do
+        local count=1
+        local current_branch="$bottom"
+        while true; do
+            current_branch=$(get_child_branch "$current_branch")
+            if [[ -n "$current_branch" ]]; then
+                ((count++))
+            else
+                break
+            fi
+        done
+        log_info "- $bottom ($count branches)"
+    done
+    log_suggestion "Run 'git checkout <branch>' to switch to a stack and see its status."
+}
+
 
 cmd_status() {
     check_gh_auth
-    local current_branch
-    current_branch=$(get_current_branch)
-
-    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
-        log_error "You are on the base branch ('$BASE_BRANCH')."
-        log_info "The status command is context-aware and needs to be run from within a stack."
-        
-        local bottoms
-        bottoms=($(get_all_stack_bottoms))
-        
-        if [ ${#bottoms[@]} -gt 0 ]; then
-            log_suggestion "Found the following stacks. Checkout one of the branches to see its status:"
-            for bottom in "${bottoms[@]}"; do
-                log_info "- $bottom"
-            done
-        else
-            log_warning "No stgit stacks found."
-            log_suggestion "Run 'stgit create <branch-name>' to start a new stack."
-        fi
-        return
-    fi
+    _guard_on_base_branch "status"
 
     log_step "Gathering stack status..."
     git fetch origin --quiet
@@ -980,6 +981,7 @@ cmd_help() {
     echo "  insert [--before] <branch-name>"
     echo "                         Insert a new branch. By default, inserts after the"
     echo "                         current branch. Use --before to insert before it."
+    echo "  list|ls                List all available stacks."
     echo "  squash                 Squash commits on the current branch and restack."
     echo "  submit                 Create GitHub PRs for all branches in the stack."
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
@@ -1015,6 +1017,7 @@ main() {
         continue) cmd_continue "$@";;
         push) cmd_push "$@";;
         pr) cmd_pr "$@";;
+        list|ls) cmd_list "$@";;
         help|--help|-h) cmd_help;;
         "") cmd_help;;
         *)
