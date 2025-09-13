@@ -123,7 +123,7 @@ teardown() {
     git checkout feature-b
 
     # Action: Run sync and answer 'y' to the delete prompt
-    run echo "y" | "$STGIT_CMD" sync
+    "$STGIT_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -149,7 +149,7 @@ teardown() {
     git checkout feature-a >/dev/null
 
     # Action
-    run "$STGIT_CMD" sync
+    run "$STGIT_CMD" sync --yes
 
     # Assertions
     assert_failure
@@ -173,7 +173,8 @@ teardown() {
     git push origin main >/dev/null
     git checkout feature-a >/dev/null
     # Run sync, which is expected to fail
-    run -1 "$STGIT_CMD" sync
+    run -1 "$STGIT_CMD" sync --yes
+    assert_failure
 
     # Manual conflict resolution
     echo "resolved" > file.txt
