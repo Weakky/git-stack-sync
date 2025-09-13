@@ -701,3 +701,98 @@ teardown() {
     assert_branch_parent feature-c feature-b
 }
 
+# --- Tests for 'stgit push' ---
+@test "push: pushes a multi-branch stack" {
+    # This is the standard use case: push all local branches in the current
+    # stack to the remote.
+    
+    # Setup
+    create_stack feature-a feature-b
+    local a_sha; a_sha=$(git rev-parse feature-a)
+    local b_sha; b_sha=$(git rev-parse feature-b)
+    run git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" push --yes
+
+    # Assertions
+    assert_success
+    assert_output --partial "All branches pushed"
+
+    # --- State Assertions ---
+    # Verify that the remote branches exist and point to the same commits as local.
+    local remote_a_sha; remote_a_sha=$(git rev-parse origin/feature-a)
+    local remote_b_sha; remote_b_sha=$(git rev-parse origin/feature-b)
+    assert_equal "$a_sha" "$remote_a_sha"
+    assert_equal "$b_sha" "$remote_b_sha"
+}
+
+@test "push: pushes a single-branch stack" {
+    # This tests that the command works correctly for the simplest case.
+    
+    # Setup
+    run "$STGIT_CMD" create feature-a
+    run create_commit "commit-a"
+    local a_sha; a_sha=$(git rev-parse feature-a)
+
+    # Action
+    run "$STGIT_CMD" push --yes
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    local remote_a_sha; remote_a_sha=$(git rev-parse origin/feature-a)
+    assert_equal "$a_sha" "$remote_a_sha"
+}
+
+@test "push: force-pushes after a rebase" {
+    # This is a critical workflow. After a `sync` or `restack`, local branches
+    # have new commit SHAs. `push` must use --force-with-lease to update the
+    # remote branches to match.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run "$STGIT_CMD" push --yes # Initial push
+    run git checkout main
+    run create_commit "new base commit"
+    run git push origin main
+    run git checkout feature-b
+    run "$STGIT_CMD" sync # This rebases feature-a and feature-b
+    local new_a_sha; new_a_sha=$(git rev-parse feature-a)
+    local new_b_sha; new_b_sha=$(git rev-parse feature-b)
+
+    # Action
+    run "$STGIT_CMD" push --yes
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    # The remote branches should now point to the new, rebased SHAs.
+    local remote_a_sha; remote_a_sha=$(git rev-parse origin/feature-a)
+    local remote_b_sha; remote_b_sha=$(git rev-parse origin/feature-b)
+    assert_equal "$new_a_sha" "$remote_a_sha"
+    assert_equal "$new_b_sha" "$remote_b_sha"
+}
+
+@test "push: cancels push if user answers no" {
+    # This test ensures that the command respects the user's choice when
+    # they are prompted for confirmation.
+    
+    # Setup
+    create_stack feature-a
+    
+    # Action: Pipe 'n' to the confirmation prompt.
+    run echo "n" | "$STGIT_CMD" push
+    
+    # Assertions
+    assert_success
+    assert_output --partial "Push cancelled"
+
+    # --- State Assertions ---
+    # The remote branch should not have been created.
+    run git rev-parse origin/feature-a
+    assert_failure
+}
+
