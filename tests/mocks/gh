@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 # This is a mock of the 'gh' CLI for testing purposes.
+MOCK_STATE_DIR="/tmp/stgit_mock_gh_state"
+mkdir -p "$MOCK_STATE_DIR"
 
 # --- MOCK BEHAVIOR ---
 # This mock simulates the behavior of the 'gh' command by checking its arguments
@@ -8,8 +10,7 @@
 
 if [[ "$1" == "repo" && "$2" == "view" ]]; then
     # Simulate the command: gh repo view --json ... --jq ...
-    # The key is to return the JSON *after* the --jq filter has been applied,
-    # as this is what the stgit script expects to receive.
+    # This returns the simplified JSON that stgit expects after the --jq filter.
     echo '{
         "owner": "test-user",
         "name": "test-repo",
@@ -18,6 +19,30 @@ if [[ "$1" == "repo" && "$2" == "view" ]]; then
     exit 0
 elif [[ "$1" == "auth" && "$2" == "status" ]]; then
     # Simulate a successful login status.
+    exit 0
+elif [[ "$1" == "pr" && "$2" == "view" ]]; then
+    pr_number=$3
+    state_file="$MOCK_STATE_DIR/pr_${pr_number}_state"
+
+    pr_state="OPEN" # Default to OPEN if not specifically mocked
+    if [[ -f "$state_file" ]]; then
+        pr_state=$(cat "$state_file")
+    fi
+
+    # The stgit script uses --jq to filter the state down to a plain string.
+    # We must simulate that behavior here.
+    if [[ "$4" == "--json" && "$5" == "state" ]]; then
+         echo "$pr_state"
+         exit 0
+    fi
+    # This also handles the case where the PR URL is requested by the status command
+    if [[ "$4" == "--json" && "$5" == "state,url" ]]; then
+        echo "{\"state\":\"$pr_state\", \"url\":\"https://github.com/mock/repo/pull/$pr_number\"}"
+        exit 0
+    fi
+
+elif [[ "$1" == "pr" && "$2" == "close" ]]; then
+    # Simulate closing a PR, just succeed silently
     exit 0
 fi
 
