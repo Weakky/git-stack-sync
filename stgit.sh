@@ -361,6 +361,49 @@ cmd_amend() {
     fi
 }
 
+cmd_squash() {
+    local current_branch
+    current_branch=$(get_current_branch)
+
+    if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+        log_error "Cannot squash on the base branch ('$BASE_BRANCH')."
+        exit 1
+    fi
+
+    local parent
+    parent=$(get_parent_branch "$current_branch")
+    if [[ -z "$parent" ]]; then
+        log_error "Cannot determine parent of '$current_branch'. Is it part of a stack?"
+        exit 1
+    fi
+
+    local commit_count
+    commit_count=$(git rev-list --count "$parent..$current_branch")
+    if [[ "$commit_count" -le 1 ]]; then
+        log_warning "Branch '$current_branch' has only one commit. Nothing to squash."
+        exit 0
+    fi
+
+    log_step "Starting interactive rebase to squash commits on '$current_branch'..."
+    log_info "Your editor will now open. To squash commits, change 'pick' to 's' or 'squash' for the commits you wish to merge into the one above it."
+    
+    # This is an interactive command, the script will pause here.
+    if git rebase -i "$parent"; then
+        log_success "Commits squashed successfully."
+        # Now, restack any children
+        local child_branch
+        child_branch=$(get_child_branch "$current_branch")
+        if [[ -n "$child_branch" ]]; then
+            cmd_restack
+        else
+            log_suggestion "Run 'stgit push' to update the remote."
+        fi
+    else
+        log_error "Interactive rebase failed or was aborted."
+        exit 1
+    fi
+}
+
 cmd_create() {
     if [[ -z "$1" ]]; then
         log_error "Branch name is required."
