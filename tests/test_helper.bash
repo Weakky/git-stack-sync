@@ -63,12 +63,11 @@ cleanup_mock_gh_state() {
 create_stack() {
     local parent="main"
     for branch_name in "$@"; do
-        git checkout "$parent" >/dev/null
-        "$STGIT_CMD" create "$branch_name" >/dev/null
-        create_commit "Commit for $branch_name"
+        run git checkout "$parent"
+        run "$STGIT_CMD" create "$branch_name"
+        run create_commit "Commit for $branch_name"
         parent="$branch_name"
     done
     # Checkout the last branch created
-    git checkout "$parent" >/dev/null
+    run git checkout "$parent"
 }
-

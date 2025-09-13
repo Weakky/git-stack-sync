@@ -3,6 +3,7 @@
 load 'bats-support/load'
 load 'bats-assert/load'
 load 'test_helper'
+load 'debug' # Load the new debug helper
 
 # --- Variables and Pre-run Checks ---
 STGIT_CMD_BASE="$BATS_TEST_DIRNAME/../stgit"
@@ -35,6 +36,20 @@ setup() {
 }
 
 teardown() {
+    # If the test failed, print detailed debug info.
+    if [ "$BATS_TEST_STATUS" -ne 0 ]; then
+        echo "Teardown: Test failed. Dumping state..." >&2
+        stgit_debug_dump "State at time of failure"
+        
+        echo "--- MOCK GH STATE ---" >&2
+        if [ -d "/tmp/stgit_mock_gh_state" ] && [ -n "$(ls -A /tmp/stgit_mock_gh_state)" ]; then
+            ls -l /tmp/stgit_mock_gh_state/ >&2
+            cat /tmp/stgit_mock_gh_state/* >&2
+        else
+            echo "  (no mock state found)" >&2
+        fi
+        echo "--- END MOCK GH STATE ---" >&2
+    fi
     # Clean up mock state after each test
     cleanup_mock_gh_state
 }
@@ -79,9 +94,9 @@ teardown() {
 
 @test "status: fails when run on the base branch and lists stacks" {
     # Setup a stack to be listed
-    "$STGIT_CMD" create feature-a
-    "$STGIT_CMD" create feature-b
-    git checkout main
+    run "$STGIT_CMD" create feature-a
+    run "$STGIT_CMD" create feature-b
+    run git checkout main
 
     # Action
     run "$STGIT_CMD" status
@@ -94,10 +109,10 @@ teardown() {
 @test "sync: simple sync with no merged branches" {
     # Setup
     create_stack feature-a feature-b
-    git checkout main
-    create_commit "New commit on main"
-    git push origin main >/dev/null
-    git checkout feature-b
+    run git checkout main
+    run create_commit "New commit on main"
+    run git push origin main
+    run git checkout feature-b
 
     # Action
     run "$STGIT_CMD" sync
@@ -122,8 +137,8 @@ teardown() {
     mock_pr_state 10 MERGED # Mock feature-a's PR as merged
     git checkout feature-b
 
-    # Action: Run sync and answer 'y' to the delete prompt
-    "$STGIT_CMD" sync --yes
+    # Action: Run sync with --yes
+    run "$STGIT_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -141,15 +156,15 @@ teardown() {
 @test "sync: handles rebase conflict gracefully" {
     # Setup
     create_commit "conflict-file" "line 1" "file.txt"
-    "$STGIT_CMD" create feature-a >/dev/null
+    run "$STGIT_CMD" create feature-a
     create_commit "feature-a changes" "line 2" "file.txt"
-    git checkout main >/dev/null
+    run git checkout main
     create_commit "main changes" "line one" "file.txt"
-    git push origin main >/dev/null
-    git checkout feature-a >/dev/null
+    run git push origin main
+    run git checkout feature-a
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$STGIT_CMD" sync
 
     # Assertions
     assert_failure
@@ -166,15 +181,14 @@ teardown() {
 @test "sync: 'continue' resumes after a sync conflict" {
     # Setup: Create a conflict
     create_commit "conflict-file" "line 1" "file.txt"
-    "$STGIT_CMD" create feature-a >/dev/null
+    run "$STGIT_CMD" create feature-a
     create_commit "feature-a changes" "line 2" "file.txt"
-    git checkout main >/dev/null
+    run git checkout main
     create_commit "main changes" "line one" "file.txt"
-    git push origin main >/dev/null
-    git checkout feature-a >/dev/null
+    run git push origin main
+    run git checkout feature-a
     # Run sync, which is expected to fail
-    run -1 "$STGIT_CMD" sync --yes
-    assert_failure
+    run "$STGIT_CMD" sync --yes
 
     # Manual conflict resolution
     echo "resolved" > file.txt

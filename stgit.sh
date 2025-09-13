@@ -41,12 +41,12 @@ log_prompt() {
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
     log_error "The GitHub CLI ('gh') is not installed."
-    log_info "Please install it to use GitHub integration features: [https://cli.github.com/](https://cli.github.com/)"
+    log_info "Please install it to use GitHub integration features: https://cli.github.com/"
     exit 1
 fi
 if ! command -v jq &> /dev/null; then
     log_error "'jq' is not installed."
-    log_info "Please install it to parse API responses: [https://stedolan.github.io/jq/](https://stedolan.github.io/jq/)"
+    log_info "Please install it to parse API responses: https://stedolan.github.io/jq/"
     exit 1
 fi
 
@@ -1103,7 +1103,8 @@ cmd_help() {
 }
 
 main() {
-    # --- Argument Parsing ---
+    # This robust, two-pass parser prevents issues with `shift` and `set -e`.
+    
     # 1. First, parse all global options that can appear anywhere.
     # We build a new array `all_args` that excludes the global options.
     local all_args=()
@@ -1124,13 +1125,14 @@ main() {
     done
 
     # 2. Now, the command is the first element of the remaining arguments.
-    local command=${all_args[0]-} # Use - to avoid error if no command
+    # The `-` prevents an error if `all_args` is empty.
+    local command=${all_args[0]-}
     
     # 3. The rest are the command's specific arguments.
     # This uses slicing to get all elements from index 1 onwards.
     local cmd_args=("${all_args[@]:1}")
 
-    # If no command was provided (e.g., only options like `stgit --yes` were given), show help.
+    # If no command was provided (e.g., only `stgit --yes`), show help and exit.
     if [[ -z "$command" ]]; then
         cmd_help
         exit 0
