@@ -53,6 +53,14 @@ mock_pr_state() {
     echo "$state" > "$mock_state_dir/pr_${pr_number}_state"
 }
 
+# Mocks a failure response for a PR creation call.
+mock_pr_create_failure() {
+    local mock_state_dir="/tmp/stgit_mock_gh_state"
+    mkdir -p "$mock_state_dir"
+    # A simple flag file is enough to trigger the failure mode in the mock.
+    touch "$mock_state_dir/pr_create_fail"
+}
+
 # Cleans up any state files created by the mock gh CLI.
 cleanup_mock_gh_state() {
     rm -rf /tmp/stgit_mock_gh_state
@@ -72,16 +80,40 @@ create_stack() {
     run git checkout "$parent"
 }
 
-# --- New Git State Assertion Helpers ---
+# --- Custom State Assertions ---
 
-# Asserts that a branch's parent is set correctly in stgit's config.
-# Usage: assert_branch_parent <child_branch> <expected_parent_branch>
+# Asserts that a branch's parent is set to a specific branch in stgit config.
 assert_branch_parent() {
-    local child=$1
+    local child_branch=$1
     local expected_parent=$2
-    run git config --get "branch.${child}.parent"
+    run git config --get "branch.${child_branch}.parent"
     assert_success
     assert_output "$expected_parent"
+}
+
+# Asserts that a branch's PR number is set in the stgit config.
+assert_branch_pr_number() {
+    local branch_name=$1
+    local expected_pr_number=$2
+    run git config --get "branch.${branch_name}.pr-number"
+    assert_success
+    assert_output "$expected_pr_number"
+}
+
+# Asserts that a branch does NOT have a PR number set.
+assert_branch_has_no_pr_number() {
+    local branch_name=$1
+    run git config --get "branch.${branch_name}.pr-number"
+    assert_failure
+}
+
+# Asserts that a given commit SHA is an ancestor of the current HEAD of a branch.
+assert_commit_is_ancestor() {
+    local ancestor_sha=$1
+    local branch_name=$2
+    # This git command returns a zero exit code if it's an ancestor, non-zero otherwise.
+    run git merge-base --is-ancestor "$ancestor_sha" "$branch_name"
+    assert_success
 }
 
 # Asserts that a local branch exists.
@@ -115,14 +147,10 @@ assert_commit_is_ancestor() {
 # useful because the commit SHA will change after a rebase.
 # Usage: assert_commit_is_reachable <old_commit_sha> <branch_name>
 assert_commit_is_reachable() {
-    local old_commit_sha=$1
-    local branch=$2
-    # Get the subject of the original commit.
-    local old_subject
-    old_subject=$(git show -s --format=%s "$old_commit_sha")
-    
-    # Get all commit subjects for the branch and check if the old one is present.
-    run git log "$branch" --format=%s
-    assert_success
-    assert_output --partial "$old_subject"
+    local commit_sha=$1
+    local branch_name=$2
+    # `git branch --contains` will list the branch if the commit is in its history.
+    run git branch --contains "$commit_sha"
+    assert_output --partial "$branch_name"
 }
+

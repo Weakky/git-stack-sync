@@ -3,50 +3,55 @@
 # This is a mock of the 'gh' CLI for testing purposes.
 MOCK_STATE_DIR="/tmp/stgit_mock_gh_state"
 mkdir -p "$MOCK_STATE_DIR"
+# Keep a counter for created PRs to ensure unique PR numbers.
+PR_COUNTER_FILE="$MOCK_STATE_DIR/pr_counter"
+if [[ ! -f "$PR_COUNTER_FILE" ]]; then
+    echo 20 > "$PR_COUNTER_FILE" # Start PR numbers at 20
+fi
+
 
 # --- MOCK BEHAVIOR ---
-# This mock simulates the behavior of the 'gh' command by checking its arguments
-# and printing the expected JSON output for different scenarios.
-
 if [[ "$1" == "repo" && "$2" == "view" ]]; then
-    # Simulate the command: gh repo view --json ... --jq ...
-    # This returns the simplified JSON that stgit expects after the --jq filter.
-    echo '{
-        "owner": "test-user",
-        "name": "test-repo",
-        "base": "main"
-    }'
+    echo '{ "owner": "test-user", "name": "test-repo", "base": "main" }'
     exit 0
+
 elif [[ "$1" == "auth" && "$2" == "status" ]]; then
-    # Simulate a successful login status.
     exit 0
+
 elif [[ "$1" == "pr" && "$2" == "view" ]]; then
     pr_number=$3
     state_file="$MOCK_STATE_DIR/pr_${pr_number}_state"
-
-    pr_state="OPEN" # Default to OPEN if not specifically mocked
+    pr_state="OPEN"
     if [[ -f "$state_file" ]]; then
         pr_state=$(cat "$state_file")
     fi
 
-    # The stgit script uses --jq to filter the state down to a plain string.
-    # We must simulate that behavior here.
     if [[ "$4" == "--json" && "$5" == "state" ]]; then
          echo "$pr_state"
          exit 0
     fi
-    # This also handles the case where the PR URL is requested by the status command
     if [[ "$4" == "--json" && "$5" == "state,url" ]]; then
         echo "{\"state\":\"$pr_state\", \"url\":\"https://github.com/mock/repo/pull/$pr_number\"}"
         exit 0
     fi
 
 elif [[ "$1" == "pr" && "$2" == "close" ]]; then
-    # Simulate closing a PR, just succeed silently
     exit 0
+
 elif [[ "$1" == "api" && "$2" =~ pulls/[0-9]+$ && "$3" == "--method" && "$4" == "PATCH" ]]; then
-    # This simulates a successful API call to update a PR's base branch.
-    # Example call from stgit: `gh api repos/.../pulls/15 --method PATCH ... -f base=new-base`
+    exit 0
+
+elif [[ "$1" == "api" && "$2" == "pulls" && "$3" == "--method" && "$4" == "POST" ]]; then
+    # This mocks the PR creation call.
+    if [[ -f "$MOCK_STATE_DIR/pr_create_fail" ]]; then
+        echo '{"message":"Mock API error: Failed to create PR."}'
+        exit 1
+    fi
+    
+    pr_number=$(cat "$PR_COUNTER_FILE")
+    echo "$((pr_number + 1))" > "$PR_COUNTER_FILE"
+    
+    echo "{\"number\": $pr_number}"
     exit 0
 fi
 

@@ -857,3 +857,110 @@ teardown() {
     assert_failure
 }
 
+# --- Tests for 'stgit submit' ---
+@test "submit: creates PRs for a multi-branch stack" {
+    # This is the standard use case: create PRs for all branches in the stack
+    # that don't already have one.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" submit
+
+    # Assertions
+    assert_success
+    assert_output --partial "Created PR #20 for 'feature-a'"
+    assert_output --partial "Created PR #21 for 'feature-b'"
+
+    # --- State Assertions ---
+    # Verify that the PR numbers have been saved to the git config.
+    assert_branch_pr_number feature-a 20
+    assert_branch_pr_number feature-b 21
+}
+
+@test "submit: skips branches that already have a PR" {
+    # The command should be idempotent and not try to re-create a PR
+    # if one is already associated with a branch.
+    
+    # Setup
+    create_stack feature-a feature-b
+    git config branch.feature-a.pr-number 10 # Pre-configure feature-a with a PR
+    run git checkout feature-b
+
+    # Action
+    run "$STGIT_CMD" submit
+
+    # Assertions
+    assert_success
+    assert_output --partial "PR #10 already exists for branch 'feature-a'"
+    assert_output --partial "Created PR #20 for 'feature-b'"
+
+    # --- State Assertions ---
+    assert_branch_pr_number feature-a 10 # Should be unchanged
+    assert_branch_pr_number feature-b 20
+}
+
+@test "submit: skips branches with no new commits" {
+    # If a branch in the stack is "empty" (has no commits that are different
+    # from its parent), the command should not create a PR for it.
+    
+    # Setup
+    run "$STGIT_CMD" create feature-a
+    run create_commit "commit for a"
+    run "$STGIT_CMD" create feature-b # No commit on feature-b
+
+    # Action
+    run "$STGIT_CMD" submit
+
+    # Assertions
+    assert_success
+    assert_output --partial "Skipping PR for 'feature-b': No new commits"
+    refute_output --partial "Created PR" "feature-b"
+
+    # --- State Assertions ---
+    assert_branch_pr_number feature-a 20
+    assert_branch_has_no_pr_number feature-b
+}
+
+@test "submit: works correctly when run from the middle of a stack" {
+    # Like other commands, `submit` should operate on the entire stack,
+    # regardless of which branch is currently checked out.
+    
+    # Setup
+    create_stack feature-a feature-b feature-c
+    run git checkout feature-b # Start from the middle
+
+    # Action
+    run "$STGIT_CMD" submit
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    assert_branch_pr_number feature-a 20
+    assert_branch_pr_number feature-b 21
+    assert_branch_pr_number feature-c 22
+}
+
+@test "submit: fails gracefully if GitHub API returns an error" {
+    # If the `gh` command fails for any reason, the script should report
+    # the error and stop, not leave the repo in a half-finished state.
+    
+    # Setup
+    create_stack feature-a
+    mock_pr_create_failure # Tell the mock to fail the next PR creation
+
+    # Action
+    run "$STGIT_CMD" submit
+
+    # Assertions
+    assert_failure
+    assert_output --partial "Failed to create PR for 'feature-a'"
+    
+    # --- State Assertions ---
+    # The PR number should NOT have been saved.
+    assert_branch_has_no_pr_number feature-a
+}
+
