@@ -461,6 +461,16 @@ _cmd_track_remove() {
 
     local parent
     parent=$(get_parent_branch "$current_branch")
+    
+    # Safeguard: only allow removal if the branch has no unique commits.
+    local commit_count
+    commit_count=$(git rev-list --count "${parent}".."${current_branch}")
+    if [[ "$commit_count" -gt 0 ]]; then
+        log_error "Cannot untrack '$current_branch' because it contains unique commits."
+        log_suggestion "To integrate these changes, consider running 'stgit squash'."
+        exit 1
+    fi
+    
     local child
     child=$(get_child_branch "$current_branch")
 
