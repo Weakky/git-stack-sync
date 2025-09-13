@@ -145,6 +145,13 @@ set_parent_branch() {
     git config "branch.${child_branch}.parent" "$parent_branch"
 }
 
+# Helper function to unset the parent of a given branch.
+unset_parent_branch() {
+    local child_branch=$1
+    git config --unset "branch.${child_branch}.parent" || true
+}
+
+
 # Helper function to get the PR number for a branch.
 get_pr_number() {
     local branch_name=$1
@@ -398,7 +405,7 @@ _guard_context() {
         log_error "The '$command_name' command requires a tracked branch."
         log_info "Branch '$current_branch' is not currently tracked by stgit."
         log_suggestion "To start a new stack, run 'stgit create <branch-name>'."
-        log_suggestion "To track an existing branch, run 'stgit track <parent-branch>'."
+        log_suggestion "To track an existing branch, run 'stgit track set <parent-branch>'."
         exit 1
     fi
 }
@@ -406,7 +413,7 @@ _guard_context() {
 
 # --- CLI Commands ---
 
-cmd_track() {
+_cmd_track_set() {
     local current_branch
     current_branch=$(get_current_branch)
     if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
@@ -424,14 +431,19 @@ cmd_track() {
         exit 1
     fi
 
+    # Safeguard: ensure the parent is actually an ancestor of the current branch.
+    if ! git merge-base --is-ancestor "$parent_branch" "$current_branch"; then
+        log_error "Invalid parent: '$parent_branch' is not an ancestor of '$current_branch'."
+        log_info "A branch's parent must be a commit in its history."
+        exit 1
+    fi
+
     set_parent_branch "$current_branch" "$parent_branch"
-    log_success "Now tracking '$current_branch' with parent '$parent_branch'."
+    log_success "Set parent of '$current_branch' to '$parent_branch'."
 
     # Check for an existing PR for this branch.
     log_info "Checking for existing pull request for '$current_branch'..."
     local pr_number
-    # Use `jq` with `// empty` to output nothing if no PR is found.
-    # The `2>/dev/null` suppresses errors from gh if the user is not authenticated.
     pr_number=$(gh pr list --head "$current_branch" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null)
 
     if [[ -n "$pr_number" ]]; then
@@ -441,6 +453,48 @@ cmd_track() {
         log_info " -> No open PR found for '$current_branch'."
     fi
 }
+
+_cmd_track_remove() {
+    _guard_context "track remove"
+    local current_branch
+    current_branch=$(get_current_branch)
+
+    local parent
+    parent=$(get_parent_branch "$current_branch")
+    local child
+    child=$(get_child_branch "$current_branch")
+
+    unset_parent_branch "$current_branch"
+    log_success "Stopped tracking '$current_branch'. It is no longer part of a stack."
+
+    # If the removed branch was in the middle of a stack, repair the metadata chain.
+    if [[ -n "$child" ]]; then
+        log_info "Repairing stack: setting parent of '$child' to '$parent'."
+        set_parent_branch "$child" "$parent"
+    fi
+}
+
+cmd_track() {
+    local sub_command=$1
+    shift || true
+    
+    case "$sub_command" in
+        set) _cmd_track_set "$@";;
+        remove) _cmd_track_remove "$@";;
+        "")
+            log_error "A sub-command is required for 'track'."
+            log_info "Usage: stgit track <set|remove> [options]"
+            cmd_help
+            exit 1
+            ;;
+        *)
+            log_error "Unknown sub-command for 'track': $sub_command"
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
 
 cmd_amend() {
     _guard_context "amend"
@@ -1145,7 +1199,8 @@ cmd_help() {
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
     echo "  status                 Display the status of the current branch stack."
-    echo "  track [parent-branch]  Set the parent of the current branch, marking it as part of a stack."
+    echo "  track <set|remove> [args]"
+    echo "                         Manage stack metadata. 'set' assigns a parent, 'remove' untracks a branch."
     echo "  next                   Navigate to the child branch in the stack."
     echo "  prev                   Navigate to the parent branch in the stack."
     echo "  restack                Update branches above the current one after making changes."
