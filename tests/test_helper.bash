@@ -151,3 +151,20 @@ assert_commit_is_reachable() {
     assert_output --partial "$branch_name"
 }
 
+# Asserts that a local branch and its remote counterpart point to the same commit.
+# Usage: assert_remote_branch_matches_local <branch_name>
+assert_remote_branch_matches_local() {
+    local branch=$1
+    # Fetch the latest updates from the remote without merging
+    run git fetch origin
+    
+    local remote_sha
+    remote_sha=$(git rev-parse "origin/$branch")
+    assert_success "Expected remote branch 'origin/$branch' to exist."
+
+    local local_sha
+    local_sha=$(git rev-parse "$branch")
+    assert_success "Expected local branch '$branch' to exist."
+
+    assert_equal "$local_sha" "$remote_sha" "Expected local branch '$branch' to match 'origin/$branch'."
+}

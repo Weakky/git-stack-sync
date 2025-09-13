@@ -164,16 +164,26 @@ teardown() {
     # 4. `stgit status` now correctly prescribes `stgit push`.
     # 5. `stgit push` updates the remote.
     # 6. `stgit status` confirms the stack is fully clean.
-    
+
     # Setup
     create_stack br1 br2
+    # Set up PRs and push the initial stack to the remote
     git config branch.br1.pr-number 10
+    git config branch.br2.pr-number 11
+    mock_pr_state 10 OPEN
+    mock_pr_state 11 OPEN
+    run "$STGIT_CMD" push --yes # Push the initial state
+
+    # Now, simulate the squash merge of br1
     mock_pr_state 10 MERGED
     run git checkout main
+    local main_sha_before_merge; main_sha_before_merge=$(git rev-parse HEAD)
     run git merge --squash br1
     run git commit -m "Squash merge of br1"
-    run git push origin main
     local new_main_sha; new_main_sha=$(git rev-parse HEAD)
+    run git push origin main
+    # Reset local main to be behind the remote, creating the condition for the test
+    run git reset --hard "$main_sha_before_merge"
     run git checkout br2
 
     # 1. First status check: Diagnose the problem
