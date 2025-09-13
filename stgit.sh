@@ -780,52 +780,78 @@ cmd_status() {
     fi
 
     echo "" # Add a newline for better formatting
-    local stack_is_out_of_sync_with_base=false
-    local stack_needs_push=false
+    
+    # Display the base branch status first for context
+    local base_behind
+    base_behind=$(git rev-list --count "$BASE_BRANCH..origin/$BASE_BRANCH")
+    local base_ahead
+    base_ahead=$(git rev-list --count "origin/$BASE_BRANCH..$BASE_BRANCH")
+    local base_status="🟢 Up to date with origin"
+    if [[ "$base_behind" -gt 0 ]]; then
+        base_status="🟡 Behind by $base_behind"
+    elif [[ "$base_ahead" -gt 0 ]]; then
+        base_status="🟡 Ahead by $base_ahead"
+    fi
+    echo "➡️  $BASE_BRANCH ($base_status)"
+    echo ""
 
-    for i in "${!stack_branches[@]}"; do
-        local branch="${stack_branches[i]}"
-        local parent
-        parent=$(get_parent_branch "$branch")
-        if [[ -z "$parent" ]]; then parent="$BASE_BRANCH"; fi
+    local stack_needs_push=false
+    local stack_needs_restack=false
+    local stack_is_out_of_sync_with_base=false
+
+    for branch in "${stack_branches[@]}"; do
+        local parent_branch
+        parent_branch=$(get_parent_branch "$branch")
+        if [[ -z "$parent_branch" ]]; then parent_branch="$BASE_BRANCH"; fi
 
         local is_current_branch=$([[ "$(get_current_branch)" == "$branch" ]] && echo " *" || echo "")
-        echo "➡️  $branch$is_current_branch (parent: $parent)"
+        echo "➡️  $branch$is_current_branch (parent: $parent_branch)"
 
-        # --- Sync Status with Parent ---
-        local ahead
-        ahead=$(git rev-list --count "$parent..$branch")
-        local behind
-        behind=$(git rev-list --count "$branch..$parent")
-        local parent_sync_status=""
-        if [[ "$behind" -gt 0 ]]; then
-            parent_sync_status="🟡 Diverged from '$parent' ($behind commits behind)"
-        elif [[ "$ahead" -eq 0 ]]; then
-            parent_sync_status="🟡 Identical to '$parent' (no new commits)"
-        else
-            parent_sync_status="🟢 Up to date with '$parent' ($ahead new commits)"
-        fi
-        echo "   ├─ Parent: $parent_sync_status"
-
-        # --- Remote Sync Status ---
-        local remote_sha
-        remote_sha=$(git rev-parse --quiet --verify "origin/$branch" 2>/dev/null || echo "")
-        local local_sha
-        local_sha=$(git rev-parse "$branch")
-        local remote_sync_status=""
-
-        if [[ -z "$remote_sha" ]]; then
-            remote_sync_status="⚪ No remote branch exists"
-            stack_needs_push=true
-        elif [[ "$local_sha" != "$remote_sha" ]]; then
-            remote_sync_status="🟡 Needs push (local history has changed)"
-            stack_needs_push=true
-        else
-            remote_sync_status="🟢 Synced with remote"
-        fi
-        echo "   ├─ Remote: $remote_sync_status"
+        # --- Status Line Logic ---
+        local status_message=""
         
-        # --- PR Status ---
+        # Determine the correct comparison point for the parent.
+        local parent_for_comparison
+        if [[ "$parent_branch" == "$BASE_BRANCH" ]]; then
+            parent_for_comparison="$BASE_BRANCH"
+        else
+            parent_for_comparison="$parent_branch"
+        fi
+
+        # Priority 1: Behind parent (This handles the base case correctly now)
+        local commits_behind_parent
+        commits_behind_parent=$(git rev-list --count "$branch..$parent_for_comparison")
+        if [[ "$commits_behind_parent" -gt 0 ]]; then
+            status_message="🟡 Behind '$parent_branch' ($commits_behind_parent commits)"
+            if [[ "$parent_branch" == "$BASE_BRANCH" ]]; then
+                stack_is_out_of_sync_with_base=true
+            else
+                stack_needs_restack=true
+            fi
+        fi
+            
+        # Priority 2: Needs push (if no other issues found yet)
+        if [[ -z "$status_message" ]]; then
+            local remote_sha
+            remote_sha=$(git rev-parse --quiet --verify "origin/$branch" 2>/dev/null || echo "")
+            local local_sha
+            local_sha=$(git rev-parse "$branch")
+            if [[ -n "$remote_sha" && "$local_sha" != "$remote_sha" ]]; then
+                status_message="🟡 Needs push (local history has changed)"
+                stack_needs_push=true
+            elif [[ -z "$remote_sha" ]]; then
+                status_message="⚪ Not on remote"
+                stack_needs_push=true
+            fi
+        fi
+
+        # Priority 3: All good
+        if [[ -z "$status_message" ]]; then
+             status_message="🟢 Synced"
+        fi
+        echo "   ├─ Status: $status_message"
+
+        # --- PR Line Logic ---
         local pr_number
         pr_number=$(get_pr_number "$branch")
         local pr_status=""
@@ -838,31 +864,28 @@ cmd_status() {
             pr_url=$(echo "$pr_info" | jq -r '.url')
 
             if [[ "$pr_state" == "OPEN" ]]; then
-                pr_status="🟢 PR #$pr_number ($pr_state) - $pr_url"
+                pr_status="🟢 #${pr_number}: OPEN - $pr_url"
             elif [[ "$pr_state" == "MERGED" ]]; then
-                pr_status="🟣 PR #$pr_number ($pr_state)"
+                pr_status="🟣 #${pr_number}: MERGED"
             elif [[ "$pr_state" == "CLOSED" ]]; then
-                pr_status="🔴 PR #$pr_number ($pr_state)"
+                pr_status="🔴 #${pr_number}: CLOSED"
             else
-                 pr_status="🟡 Could not fetch status for PR #$pr_number"
+                 pr_status="🟡 Could not fetch status for PR #${pr_number}"
             fi
         else
-            pr_status="⚪ No PR submitted for this branch."
+            pr_status="⚪ No PR submitted"
         fi
         echo "   └─ PR:     $pr_status"
-        
-        # Check if the branch is behind the main base branch
-        local behind_base
-        behind_base=$(git rev-list --count "$branch..origin/$BASE_BRANCH")
-        if [[ "$behind_base" -gt 0 ]]; then
-            stack_is_out_of_sync_with_base=true
-        fi
+        echo ""
     done
     
-    echo "" # Trailing newline
+    # --- Final Summary Logic ---
     if [[ "$stack_is_out_of_sync_with_base" == true ]]; then
-        log_warning "One or more branches are behind '$BASE_BRANCH'."
+        log_warning "The stack is behind '$BASE_BRANCH'."
         log_suggestion "Run 'stgit sync' to update the entire stack."
+    elif [[ "$stack_needs_restack" == true ]]; then
+        log_warning "A branch in the stack is behind its parent."
+        log_suggestion "Run 'stgit restack' from the out-of-date branch or 'stgit sync' for the whole stack."
     elif [[ "$stack_needs_push" == true ]]; then
         log_warning "One or more local branches have changed."
         log_suggestion "Run 'stgit push' to update the remote."
@@ -926,3 +949,5 @@ main() {
 }
 
 main "$@"
+" selected in the Canvas. I need to edit this file.
+
