@@ -42,6 +42,10 @@ log_suggestion() {
     echo "💡 Next step: $1"
 }
 
+log_prompt() {
+    echo "❔ $1"
+}
+
 # --- Dependency Checks ---
 if ! command -v gh &> /dev/null; then
     log_error "The GitHub CLI ('gh') is not installed."
@@ -296,7 +300,8 @@ _finish_operation() {
 
     if [[ "${COMMAND}" == "sync" && -n "${MERGED_BRANCHES_TO_DELETE}" ]]; then
         for branch_to_delete in ${MERGED_BRANCHES_TO_DELETE}; do
-            read -p "Do you want to delete the local merged branch '$branch_to_delete'? (y/N) " -n 1 -r
+            log_prompt "Do you want to delete the local merged branch '$branch_to_delete'?"
+            read -p "(y/N) " -n 1 -r
             echo
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 if [[ "$(get_current_branch)" == "$branch_to_delete" ]]; then
@@ -649,7 +654,8 @@ cmd_push() {
         log_info "$branch"
     done
     
-    read -p "Are you sure? (y/N) " -n 1 -r
+    log_prompt "Are you sure?"
+    read -p "(y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         log_warning "Push cancelled."
@@ -676,6 +682,61 @@ cmd_pr() {
         log_suggestion "Run 'stgit submit' to create one."
     fi
 }
+
+cmd_delete() {
+    check_gh_auth
+    local branch_to_delete
+    branch_to_delete=$(get_current_branch)
+
+    if [[ "$branch_to_delete" == "$BASE_BRANCH" ]]; then
+        log_error "Cannot delete the base branch ('$BASE_BRANCH')."
+        exit 1
+    fi
+
+    local parent
+    parent=$(get_parent_branch "$branch_to_delete")
+    local child
+    child=$(get_child_branch "$branch_to_delete")
+
+    if [[ -z "$parent" ]]; then
+        log_error "Cannot determine parent of '$branch_to_delete'. Is it part of a stack?"
+        exit 1
+    fi
+
+    log_warning "You are about to permanently delete branch '$branch_to_delete'."
+    log_prompt "This action cannot be undone. Are you sure you want to continue?"
+    read -p "(y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_warning "Deletion cancelled."
+        exit 1
+    fi
+    
+    # Reparent and rebase the child stack if it exists
+    if [[ -n "$child" ]]; then
+        _rebase_sub_stack_and_update_pr "$parent" "$child"
+    fi
+
+    local pr_number
+    pr_number=$(get_pr_number "$branch_to_delete")
+    if [[ -n "$pr_number" ]]; then
+        log_prompt "Do you want to close the associated GitHub PR #${pr_number}?"
+        read -p "(y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log_step "Closing PR #${pr_number} on GitHub..."
+            gh pr close "$pr_number"
+            log_success "PR #${pr_number} closed."
+        fi
+    fi
+
+    log_step "Deleting branch '$branch_to_delete' locally and on remote..."
+    git checkout "$parent" >/dev/null 2>&1
+    git branch -D "$branch_to_delete" >/dev/null 2>&1
+    git push origin --delete "$branch_to_delete" >/dev/null 2>&1
+    log_success "Branch '$branch_to_delete' deleted successfully."
+}
+
 
 cmd_status() {
     check_gh_auth
@@ -719,7 +780,8 @@ cmd_status() {
     fi
 
     echo "" # Add a newline for better formatting
-    local stack_is_out_of_sync=false
+    local stack_is_out_of_sync_with_base=false
+    local stack_needs_push=false
 
     for i in "${!stack_branches[@]}"; do
         local branch="${stack_branches[i]}"
@@ -730,17 +792,11 @@ cmd_status() {
         local is_current_branch=$([[ "$(get_current_branch)" == "$branch" ]] && echo " *" || echo "")
         echo "➡️  $branch$is_current_branch (parent: $parent)"
 
-        local connector_char="├─"
-        if [ "$i" -eq $((${#stack_branches[@]} - 1)) ]; then
-            connector_char="└─"
-        fi
-
         # --- Sync Status with Parent ---
         local ahead
         ahead=$(git rev-list --count "$parent..$branch")
         local behind
         behind=$(git rev-list --count "$branch..$parent")
-        
         local parent_sync_status=""
         if [[ "$behind" -gt 0 ]]; then
             parent_sync_status="🟡 Diverged from '$parent' ($behind commits behind)"
@@ -749,7 +805,25 @@ cmd_status() {
         else
             parent_sync_status="🟢 Up to date with '$parent' ($ahead new commits)"
         fi
-        echo "   $connector_char Sync: $parent_sync_status"
+        echo "   ├─ Parent: $parent_sync_status"
+
+        # --- Remote Sync Status ---
+        local remote_sha
+        remote_sha=$(git rev-parse --quiet --verify "origin/$branch" 2>/dev/null || echo "")
+        local local_sha
+        local_sha=$(git rev-parse "$branch")
+        local remote_sync_status=""
+
+        if [[ -z "$remote_sha" ]]; then
+            remote_sync_status="⚪ No remote branch exists"
+            stack_needs_push=true
+        elif [[ "$local_sha" != "$remote_sha" ]]; then
+            remote_sync_status="🟡 Needs push (local history has changed)"
+            stack_needs_push=true
+        else
+            remote_sync_status="🟢 Synced with remote"
+        fi
+        echo "   ├─ Remote: $remote_sync_status"
         
         # --- PR Status ---
         local pr_number
@@ -775,22 +849,25 @@ cmd_status() {
         else
             pr_status="⚪ No PR submitted for this branch."
         fi
-        echo "   └─ PR:   $pr_status"
+        echo "   └─ PR:     $pr_status"
         
         # Check if the branch is behind the main base branch
         local behind_base
         behind_base=$(git rev-list --count "$branch..origin/$BASE_BRANCH")
         if [[ "$behind_base" -gt 0 ]]; then
-            stack_is_out_of_sync=true
+            stack_is_out_of_sync_with_base=true
         fi
     done
     
     echo "" # Trailing newline
-    if [[ "$stack_is_out_of_sync" == true ]]; then
+    if [[ "$stack_is_out_of_sync_with_base" == true ]]; then
         log_warning "One or more branches are behind '$BASE_BRANCH'."
         log_suggestion "Run 'stgit sync' to update the entire stack."
+    elif [[ "$stack_needs_push" == true ]]; then
+        log_warning "One or more local branches have changed."
+        log_suggestion "Run 'stgit push' to update the remote."
     else
-        log_success "Stack is up to date with '$BASE_BRANCH'."
+        log_success "Stack is up to date with '$BASE_BRANCH' and remote."
     fi
 }
 
@@ -802,6 +879,7 @@ cmd_help() {
     echo ""
     echo "Commands:"
     echo "  create <branch-name>   Create a new branch on top of the current one."
+    echo "  delete                 Delete the current branch and repair the stack."
     echo "  insert [--before] <branch-name>"
     echo "                         Insert a new branch. By default, inserts after the"
     echo "                         current branch. Use --before to insert before it."
@@ -826,6 +904,7 @@ main() {
 
     case "$cmd" in
         create) cmd_create "$@";;
+        delete) cmd_delete "$@";;
         insert) cmd_insert "$@";;
         submit) cmd_submit "$@";;
         sync) cmd_sync "$@";;
