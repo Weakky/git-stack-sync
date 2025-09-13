@@ -892,6 +892,7 @@ cmd_status() {
     local stack_needs_push=false
     local stack_needs_restack=false
     local stack_is_out_of_sync_with_base=false
+    local stack_needs_submit=false
 
     for branch in "${stack_branches[@]}"; do
         local parent_branch
@@ -968,6 +969,7 @@ cmd_status() {
             fi
         else
             pr_status="⚪ No PR submitted"
+            stack_needs_submit=true
         fi
         echo "   └─ PR:     $pr_status"
         echo ""
@@ -983,6 +985,9 @@ cmd_status() {
     elif [[ "$stack_needs_push" == true ]]; then
         log_warning "One or more local branches have changed."
         log_suggestion "Run 'stgit push' to update the remote."
+    elif [[ "$stack_needs_submit" == true ]]; then
+        log_warning "One or more branches are missing a pull request."
+        log_suggestion "Run 'stgit submit' to create them."
     else
         log_success "Stack is up to date with '$BASE_BRANCH' and remote."
     fi
