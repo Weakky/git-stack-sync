@@ -44,7 +44,7 @@ elif [[ "$1" == "pr" && "$2" == "view" ]]; then
 elif [[ "$1" == "pr" && "$2" == "close" ]]; then
     # Simulate closing a PR, just succeed silently
     exit 0
-elif [[ "$1" == "api" && "$3" =~ ^pulls/[0-9]+$ && "$5" == "PATCH" ]]; then
+elif [[ "$1" == "api" && "$2" =~ pulls/[0-9]+$ && "$3" == "--method" && "$4" == "PATCH" ]]; then
     # This simulates a successful API call to update a PR's base branch.
     # Example call from stgit: `gh api repos/.../pulls/15 --method PATCH ... -f base=new-base`
     exit 0
@@ -53,3 +53,4 @@ fi
 # If the command is not one of the mocked ones, exit with an error.
 echo "Error: Unmocked gh command received by mock: gh $*" >&2
 exit 1
+
