@@ -156,6 +156,36 @@ teardown() {
     assert_branch_exists feature-b
 }
 
+@test "sync: avoids conflicts when parent was squash-merged" {
+    # This tests a critical real-world scenario. If a parent branch (`br1`) is
+    # squash-merged into `main`, its commits are squashed into a new commit on `main`.
+    # `stgit sync` must be smart enough to rebase the child (`br2`) onto `main`
+    # without trying to re-apply the commits that were already squashed, which would
+    # cause a rebase conflict.
+    
+    # Setup
+    create_stack br1 br2
+    git config branch.br1.pr-number 10
+    mock_pr_state 10 MERGED
+    
+    # Simulate a squash merge of br1 into main
+    run git checkout main
+    run git merge --squash br1
+    run git commit -m "Squash merge of br1"
+    run git push origin main
+    run git checkout br2
+
+    # Action
+    run "$STGIT_CMD" sync --yes
+
+    # Assertions
+    assert_success # The key assertion is that this command does not fail.
+    
+    # --- State Assertions ---
+    assert_branch_parent br2 main
+    assert_branch_does_not_exist br1
+}
+
 @test "sync: handles rebase conflict gracefully" {
     # This test ensures that if 'git rebase' fails during a sync (due to a merge
     # conflict), the script stops and provides instructions to the user on how
