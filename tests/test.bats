@@ -530,3 +530,48 @@ teardown() {
     assert_output "feature-a" # Should return to original branch
 }
 
+@test "restack: handles branch that becomes empty after rebase" {
+    # This tests what happens if an amend on a parent branch makes a child
+    # branch's commit redundant. The rebase should make the child branch
+    # "empty" (i.e., point to the same commit as its parent). The script should
+    # warn the user about this and continue to rebase subsequent branches correctly.
+    
+    # Setup
+    create_stack feature-a feature-b feature-c
+    # On feature-b, create file-b.txt
+    run git checkout feature-b
+    run create_commit "add file-b" "content" "file-b.txt"
+    # Now, go back to feature-a and amend it to include the *same* change.
+    run git checkout feature-a
+    run create_commit "add file-b" "content" "file-b.txt"
+    run git add .
+    run git commit --amend --no-edit
+    local new_a_sha; new_a_sha=$(git rev-parse HEAD)
+
+    # Action
+    run "$STGIT_CMD" restack
+
+    # Assertions
+    assert_success
+    assert_output --partial "branch 'feature-b' has no new changes"
+
+    # --- State Assertions ---
+    # feature-b should now point to the same commit as the new feature-a.
+    local new_b_sha; new_b_sha=$(git rev-parse feature-b)
+    assert_equal "$new_a_sha" "$new_b_sha"
+    # feature-c should be rebased on top of the (now empty) feature-b.
+    assert_commit_is_ancestor "$new_b_sha" feature-c
+}
+
+@test "continue: does nothing when no operation is in progress" {
+    # The 'continue' command should only work when a state file exists.
+    # If run at any other time, it should inform the user and exit cleanly.
+    
+    # Action
+    run "$STGIT_CMD" continue
+
+    # Assertions
+    assert_success
+    assert_output --partial "No stgit operation to continue. Nothing to do."
+}
+
