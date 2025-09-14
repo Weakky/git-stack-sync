@@ -77,10 +77,6 @@ Here is a detailed list of all available commands.
 
     Squashes the commits from one branch into another and deletes the squashed branch. By default, it squashes the current branch into its `parent`. Use `--into child` to squash the child branch into the current one. `gss` will prompt to close the pull request of the deleted branch.
 
-  * #### `gss delete`
-
-    Deletes the current branch both locally and remotely. If the branch has children, they are re-parented and rebased onto the deleted branch's parent. `gss` will also prompt you to close the associated pull request on GitHub.
-
   * #### `gss track <set|remove> [parent-branch]`
 
     Manually manages stack metadata.
