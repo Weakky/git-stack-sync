@@ -212,35 +212,50 @@ set_parent_branch() {
     local parent_branch=$2
     _ensure_branch_maps_loaded
 
-    # Check if the child already has a parent and remove the old entry
-    local child_index
-    child_index=$(_get_map_index "$child_branch" "${GSS_PARENTS_KEYS[@]}")
-    if [[ "$child_index" -ne "-1" ]]; then
-        local old_parent="${GSS_PARENTS_VALUES[$child_index]}"
-        # Remove old parent's child mapping
-        local old_parent_child_index
-        old_parent_child_index=$(_get_map_index "$old_parent" "${GSS_CHILDREN_KEYS[@]}")
-        if [[ "$old_parent_child_index" -ne "-1" ]]; then
-            unset 'GSS_CHILDREN_KEYS[$old_parent_child_index]'
-            unset 'GSS_CHILDREN_VALUES[$old_parent_child_index]'
+    local old_parent
+    old_parent=$(get_parent_branch "$child_branch")
+
+    # --- Rebuild Cache Arrays (to avoid sparse arrays from `unset`) ---
+    local new_parents_keys=()
+    local new_parents_values=()
+    for i in "${!GSS_PARENTS_KEYS[@]}"; do
+        if [[ "${GSS_PARENTS_KEYS[$i]}" != "$child_branch" ]]; then
+            new_parents_keys+=("${GSS_PARENTS_KEYS[$i]}")
+            new_parents_values+=("${GSS_PARENTS_VALUES[$i]}")
         fi
-        # Remove old child-to-parent mapping
-        unset 'GSS_PARENTS_KEYS[$child_index]'
-        unset 'GSS_PARENTS_VALUES[$child_index]'
+    done
+    
+    local new_children_keys=()
+    local new_children_values=()
+    if [[ -n "$old_parent" ]]; then
+        for i in "${!GSS_CHILDREN_KEYS[@]}"; do
+            if [[ "${GSS_CHILDREN_KEYS[$i]}" != "$old_parent" || "${GSS_CHILDREN_VALUES[$i]}" != "$child_branch" ]]; then
+                new_children_keys+=("${GSS_CHILDREN_KEYS[$i]}")
+                new_children_values+=("${GSS_CHILDREN_VALUES[$i]}")
+            fi
+        done
+    else
+        new_children_keys=("${GSS_CHILDREN_KEYS[@]}")
+        new_children_values=("${GSS_CHILDREN_VALUES[@]}")
     fi
-    
-    # Update git config
+
+    # Add the new relationship
+    new_parents_keys+=("$child_branch")
+    new_parents_values+=("$parent_branch")
+    new_children_keys+=("$parent_branch")
+    new_children_values+=("$child_branch")
+
+    # Overwrite the global arrays with the new, clean ones
+    GSS_PARENTS_KEYS=("${new_parents_keys[@]}")
+    GSS_PARENTS_VALUES=("${new_parents_values[@]}")
+    GSS_CHILDREN_KEYS=("${new_children_keys[@]}")
+    GSS_CHILDREN_VALUES=("${new_children_values[@]}")
+
+    # Update the persistent git config
     git config "branch.${child_branch}.parent" "$parent_branch"
-    
-    # Add new entries to in-memory maps
-    GSS_PARENTS_KEYS+=("$child_branch")
-    GSS_PARENTS_VALUES+=("$parent_branch")
-    GSS_CHILDREN_KEYS+=("$parent_branch")
-    GSS_CHILDREN_VALUES+=("$child_branch")
 }
 
 # Helper function to unset the parent of a given branch.
-# Updates the git config and cache accordingly.
 unset_parent_branch() {
     local child_branch=$1
     _ensure_branch_maps_loaded
@@ -248,33 +263,33 @@ unset_parent_branch() {
     local parent_branch
     parent_branch=$(get_parent_branch "$child_branch")
     
-    # Update git config
+    # Update git config first
     git config --unset "branch.${child_branch}.parent" || true
     
-    # Remove from in-memory maps
+    # --- Rebuild Cache Arrays ---
     if [[ -n "$parent_branch" ]]; then
-        # Remove from parent map (this is okay as child keys are unique)
-        local child_index
-        child_index=$(_get_map_index "$child_branch" "${GSS_PARENTS_KEYS[@]}")
-        if [[ "$child_index" -ne "-1" ]]; then
-            unset 'GSS_PARENTS_KEYS[$child_index]'
-            unset 'GSS_PARENTS_VALUES[$child_index]'
-        fi
-
-        # Remove from child map (needs to be specific)
-        # Find the specific entry where key is parent AND value is child, then unset it.
-        local parent_index_to_remove=-1
-        for i in "${!GSS_CHILDREN_KEYS[@]}"; do
-            if [[ "${GSS_CHILDREN_KEYS[$i]}" == "$parent_branch" && "${GSS_CHILDREN_VALUES[$i]}" == "$child_branch" ]]; then
-                parent_index_to_remove=$i
-                break
+        local new_parents_keys=()
+        local new_parents_values=()
+        for i in "${!GSS_PARENTS_KEYS[@]}"; do
+            if [[ "${GSS_PARENTS_KEYS[$i]}" != "$child_branch" ]]; then
+                new_parents_keys+=("${GSS_PARENTS_KEYS[$i]}")
+                new_parents_values+=("${GSS_PARENTS_VALUES[$i]}")
             fi
         done
 
-        if [[ "$parent_index_to_remove" -ne "-1" ]]; then
-            unset 'GSS_CHILDREN_KEYS[$parent_index_to_remove]'
-            unset 'GSS_CHILDREN_VALUES[$parent_index_to_remove]'
-        fi
+        local new_children_keys=()
+        local new_children_values=()
+        for i in "${!GSS_CHILDREN_KEYS[@]}"; do
+             if [[ "${GSS_CHILDREN_KEYS[$i]}" != "$parent_branch" || "${GSS_CHILDREN_VALUES[$i]}" != "$child_branch" ]]; then
+                new_children_keys+=("${GSS_CHILDREN_KEYS[$i]}")
+                new_children_values+=("${GSS_CHILDREN_VALUES[$i]}")
+            fi
+        done
+
+        GSS_PARENTS_KEYS=("${new_parents_keys[@]}")
+        GSS_PARENTS_VALUES=("${new_parents_values[@]}")
+        GSS_CHILDREN_KEYS=("${new_children_keys[@]}")
+        GSS_CHILDREN_VALUES=("${new_children_values[@]}")
     fi
 }
 
@@ -997,8 +1012,8 @@ cmd_submit() {
 
 
 cmd_up() {
-    _guard_dirty_state
     _guard_context "up"
+    _guard_dirty_state
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -1014,8 +1029,8 @@ cmd_up() {
 }
 
 cmd_down() {
-    _guard_dirty_state
     _guard_context "down"
+    _guard_dirty_state
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -1107,6 +1122,7 @@ cmd_continue() {
 
         # The rebase succeeded, so we must update its parent metadata.
         log_info "Updating metadata for resolved branch '$just_completed_branch'..."
+        # Use the helper function to ensure both config and cache are updated atomically.
         set_parent_branch "$just_completed_branch" "$LAST_SUCCESSFUL_BASE"
 
         # The new base for the rest of the stack is the branch we just fixed.
