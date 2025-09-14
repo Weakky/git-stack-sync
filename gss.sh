@@ -1263,7 +1263,6 @@ cmd_help() {
     echo "  squash [--into parent|child]"
     echo "                         Squash stacked branches together. Defaults to squashing"
     echo "                         the current branch into its parent."
-    echo "  delete                 Delete the current branch and repair the stack."
     echo ""
     echo "History & Synchronization:"
     echo "  amend                  Amend staged changes to the last commit and restack."
