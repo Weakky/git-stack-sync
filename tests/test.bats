@@ -83,9 +83,9 @@ teardown() {
 }
 
 # --- Tests for commands on the base branch ---
-@test "next: fails when run on the base branch" {
+@test "up: fails when run on the base branch" {
     # Setup: We are on 'main' by default
-    run "$GSS_CMD" next
+    run "$GSS_CMD" up
     assert_failure
     assert_output --partial "command cannot be run from the base branch"
 }

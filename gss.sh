@@ -1396,8 +1396,8 @@ cmd_help() {
     echo "Inspection & Navigation:"
     echo "  status                 Display the status of the current branch stack."
     echo "  list|ls                List all available stacks."
-    echo "  next                   Navigate to the child branch in the stack."
-    echo "  prev                   Navigate to the parent branch in the stack."
+    echo "  up                     Navigate to the child branch in the stack."
+    echo "  down                   Navigate to the parent branch in the stack."
     echo ""
     echo "GitHub Integration:"
     echo "  submit                 Create GitHub PRs for all branches in the stack."
@@ -1463,8 +1463,8 @@ main() {
         sync) cmd_sync "${cmd_args[@]}";;
         status) cmd_status "${cmd_args[@]}";;
         track) cmd_track "${cmd_args[@]}";;
-        next) cmd_up "${cmd_args[@]}";;
-        prev) cmd_down "${cmd_args[@]}";;
+        up) cmd_up "${cmd_args[@]}";;
+        down) cmd_down "${cmd_args[@]}";;
         restack) cmd_restack "${cmd_args[@]}";;
         continue) cmd_continue "${cmd_args[@]}";;
         push) cmd_push "${cmd_args[@]}";;
