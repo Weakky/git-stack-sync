@@ -426,7 +426,12 @@ _perform_iterative_rebase() {
         local parent_for_count_check="$current_base"
 
         # --- On successful rebase, update the state file ---
-        set_parent_branch "$branch" "$current_base"
+        local parent_to_set="$current_base"
+        if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
+            parent_to_set="$BASE_BRANCH"
+        fi
+        set_parent_branch "$branch" "$parent_to_set"
+        
         current_base="$branch"
         remaining_branches=("${remaining_branches[@]:1}") # Pop the first element
         
@@ -1106,7 +1111,7 @@ cmd_continue() {
                 echo
                 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                     log_error "Cannot continue. The stack is in an inconsistent state."
-                    log_suggestion "Please fix the history of '$conflicted_branch'."
+                    log_suggestion "Please fix the history of '$conflicted_branch' or run 'gss clean' to reset all metadata."
                     exit 1
                 fi
             fi
@@ -1122,8 +1127,12 @@ cmd_continue() {
 
         # The rebase succeeded, so we must update its parent metadata.
         log_info "Updating metadata for resolved branch '$just_completed_branch'..."
-        # Use the helper function to ensure both config and cache are updated atomically.
-        set_parent_branch "$just_completed_branch" "$LAST_SUCCESSFUL_BASE"
+        
+        local parent_to_set="$LAST_SUCCESSFUL_BASE"
+        if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
+            parent_to_set="$BASE_BRANCH"
+        fi
+        set_parent_branch "$just_completed_branch" "$parent_to_set"
 
         # The new base for the rest of the stack is the branch we just fixed.
         local new_base="$just_completed_branch"

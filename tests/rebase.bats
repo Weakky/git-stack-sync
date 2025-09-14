@@ -3,6 +3,7 @@
 load 'bats-support/load'
 load 'bats-assert/load'
 load 'test_helper'
+load 'debug'
 
 # --- Variables ---
 GSS_CMD_BASE="$BATS_TEST_DIRNAME/../gss"
@@ -115,12 +116,10 @@ teardown() {
     assert_output --partial "Rebase conflict detected while rebasing 'br2'"
 
     # --- State Assertions After First Failure ---
-    # The state file should list br3 as the remaining branch.
     run cat ".git/GSS_OPERATION_STATE"
     assert_output --partial "REMAINING_BRANCHES_TO_REBASE='br2 br3'"
 
-    # Resolution 1: Fix conflict for br2.
-    # The user must follow the instructions from the tool.
+    # Resolution 1: Fix conflict for br2. This rebase finishes successfully.
     echo "version=2-resolved" > file1.txt
     run git add file1.txt
     GIT_EDITOR=true run git rebase --continue
@@ -132,14 +131,34 @@ teardown() {
     assert_output --partial "Rebase conflict detected while rebasing 'br3'"
 
     # --- State Assertions After Second Failure ---
-    # The state file should now be empty for REMAINING_BRANCHES_TO_REBASE, as br3 was the last one.
     run cat ".git/GSS_OPERATION_STATE"
-    refute_output --partial "REMAINING_BRANCHES_TO_REBASE="
+    assert_output --partial "REMAINING_BRANCHES_TO_REBASE='br3'"
 
-    # Resolution 2: Fix conflict for br3.
+    # --- Start multi-stage resolution for br3 ---
+    # The rebase of br3 is complex due to the squashed history of br1.
+    # It will hit multiple conflicts as it tries to replay the original commits.
+
+    # Resolution 2: First, it conflicts on file1.txt from br1's history.
+    echo "version=1" > file1.txt
+    run git add file1.txt
+    GIT_EDITOR=true run git rebase --continue
+    
+    # Resolution 3: Second, it conflicts on file2.txt from br1's history.
+    echo "version=1" > file2.txt
+    run git add file2.txt
+    GIT_EDITOR=true run git rebase --continue
+
+    # Resolution 4: Third, it conflicts on file1.txt from br2's history.
+    echo "version=2-resolved" > file1.txt
+    run git add file1.txt
+    GIT_EDITOR=true run git rebase --continue
+
+    # Resolution 5: Finally, it conflicts on file2.txt with br3's own commit.
     echo "version=3-resolved" > file2.txt
     run git add file2.txt
     GIT_EDITOR=true run git rebase --continue
+
+    # At this point, the git rebase operation is fully complete.
 
     # Action 3: Now that all git operations are done, run gss continue to finalize.
     run "$GSS_CMD" continue --yes
