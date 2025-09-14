@@ -383,11 +383,22 @@ _perform_iterative_rebase() {
     if [[ -n "$merged_branches_to_delete" ]]; then
         echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
     fi
+    # For sync, we need the list of unmerged branches to repair metadata later.
+    if [[ "$command" == "sync" ]]; then
+        echo "UNMERGED_BRANCHES='${branches_to_rebase[*]}'" >> "$STATE_FILE"
+    fi
 
     for branch in "${branches_to_rebase[@]}"; do
         log_step "Rebasing '$branch' onto '$new_base'..."
         git checkout "$branch" >/dev/null 2>&1
-        if ! git rebase "$new_base"; then
+        local old_base
+        old_base=$(get_parent_branch "$branch")
+        if [[ -z "$old_base" ]]; then
+            log_error "Could not determine parent of '$branch' for rebase. Aborting."
+            exit 1
+        fi
+
+        if ! git rebase --onto "$new_base" "$old_base" "$branch"; then
             echo ""
             log_error "Rebase conflict detected while rebasing '$branch'."
             log_info "Please follow these steps to resolve:"
@@ -437,7 +448,9 @@ _rebase_sub_stack_and_update_pr() {
     for branch_to_rebase in "${sub_stack[@]}"; do
         log_info "Rebasing '$branch_to_rebase'..."
         git checkout "$branch_to_rebase" >/dev/null 2>&1
-        git rebase "$new_rebase_base" >/dev/null 2>&1
+        local old_rebase_base
+        old_rebase_base=$(get_parent_branch "$branch_to_rebase")
+        git rebase --onto "$new_rebase_base" "$old_rebase_base" "$branch_to_rebase" >/dev/null 2>&1
         new_rebase_base="$branch_to_rebase"
     done
     log_success "Sub-stack successfully rebased."
@@ -491,6 +504,27 @@ _finish_operation() {
                 git branch -D "$branch_to_delete" >/dev/null 2>&1
                 log_success "Deleted local branch '$branch_to_delete'."
             fi
+        done
+    fi
+
+     # After a sync, the parent metadata is stale and needs to be repaired.
+    if [[ "${COMMAND}" == "sync" && -n "${UNMERGED_BRANCHES}" ]]; then
+        log_step "Updating stack metadata..."
+        # We need the original list of merged branches to determine the new parent.
+        local merged_branch_list
+        merged_branch_list="${MERGED_BRANCHES_TO_DELETE}"
+        local last_unmerged_ancestor="$BASE_BRANCH"
+        for branch in ${UNMERGED_BRANCHES}; do
+            local original_parent
+            original_parent=$(get_parent_branch "$branch")
+
+            # A branch needs a new parent if its old parent was one of the merged branches.
+            # We also update the parent of the very first branch in the stack.
+            if [[ " ${merged_branch_list} " =~ " ${original_parent} " ]] || [[ "$last_unmerged_ancestor" == "$BASE_BRANCH" ]]; then
+                set_parent_branch "$branch" "$last_unmerged_ancestor"
+                log_info "Set parent of '$branch' to '$last_unmerged_ancestor'."
+            fi
+            last_unmerged_ancestor="$branch"
         done
     fi
 
@@ -1119,22 +1153,8 @@ cmd_sync() {
         fi
     done
 
-    # Second pass: Update parentage of remaining branches
-    local last_unmerged_ancestor="$BASE_BRANCH"
-    for branch in "${unmerged_branches[@]}"; do
-        local original_parent
-        original_parent=$(get_parent_branch "$branch")
-        
-        # If the original parent was merged, we need to find the new parent.
-        # Otherwise, the new parent is the last unmerged branch we've seen.
-        if [[ " ${merged_branches[*]} " =~ " ${original_parent} " ]]; then
-            log_info "Updating parent of '$branch' to '$last_unmerged_ancestor'."
-            set_parent_branch "$branch" "$last_unmerged_ancestor"
-        fi
-        last_unmerged_ancestor="$branch"
-    done
 
-    # Third pass: Rebase the remaining (unmerged) stack
+    # Rebase the remaining (unmerged) stack
     if [ ${#unmerged_branches[@]} -gt 0 ]; then
         log_step "Rebasing remaining stack onto '$BASE_BRANCH'..."
         
