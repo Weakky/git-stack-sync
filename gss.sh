@@ -408,6 +408,8 @@ _perform_iterative_rebase() {
             exit 1
         fi
         
+        local parent_for_count_check="$current_base"
+
         # --- On successful rebase, update the state file ---
         set_parent_branch "$branch" "$current_base"
         current_base="$branch"
@@ -419,11 +421,11 @@ _perform_iterative_rebase() {
 
         # Check if the rebase resulted in an empty branch and warn the user.
         local commit_count
-        commit_count=$(git rev-list --count "${current_base}".."${branch}")
+        commit_count=$(git rev-list --count "${parent_for_count_check}".."${branch}")
         if [[ "$commit_count" -eq 0 ]]; then
             local pr_number_to_check
             pr_number_to_check=$(get_pr_number "$branch")
-            log_warning "After rebasing, branch '$branch' has no new changes compared to '$current_base'."
+            log_warning "After rebasing, branch '$branch' has no new changes compared to '$parent_for_count_check'."
             if [[ -n "$pr_number_to_check" ]]; then
                 log_info "This can happen if changes from this branch were also introduced into its parent."
                 log_info "Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
@@ -1073,9 +1075,27 @@ cmd_continue() {
     local remaining_branches_array=($REMAINING_BRANCHES_TO_REBASE)
     if [[ ${#remaining_branches_array[@]} -gt 0 ]]; then
         log_step "Resuming '$COMMAND' operation..."
-        _perform_iterative_rebase "$COMMAND" "$ORIGINAL_BRANCH" "$MERGED_BRANCHES_TO_DELETE" "$LAST_SUCCESSFUL_BASE" "${remaining_branches_array[@]}"
+        
+        # The first branch in the list is the one that was just manually fixed.
+        local just_completed_branch="${remaining_branches_array[0]}"
+
+        # The rebase succeeded, so we must update its parent metadata.
+        log_info "Updating metadata for resolved branch '$just_completed_branch'..."
+        set_parent_branch "$just_completed_branch" "$LAST_SUCCESSFUL_BASE"
+
+        # The new base for the rest of the stack is the branch we just fixed.
+        local new_base="$just_completed_branch"
+        
+        # The new list of branches to rebase is the rest of the array (the tail).
+        local branches_to_resume=("${remaining_branches_array[@]:1}")
+
+        # If there's more work to do, call the rebase function again with the smaller list.
+        if [[ ${#branches_to_resume[@]} -gt 0 ]]; then
+            _perform_iterative_rebase "$COMMAND" "$ORIGINAL_BRANCH" "$MERGED_BRANCHES_TO_DELETE" "$new_base" "${branches_to_resume[@]}"
+        fi
     fi
 
+    # Whether we had more work or not, the operation is now ready to be finalized.
     _finish_operation
 }
 
