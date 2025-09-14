@@ -244,8 +244,9 @@ _perform_iterative_rebase() {
     local merged_branches_to_delete=$3
     
     # Rebase parameters
-    local initial_base=$4
-    shift 4
+    local rebase_target=$4
+    local parent_to_record=$5 # The "clean" name to save in the config
+    shift 5
     local branches_to_rebase=("$@")
 
     # Save the initial state BEFORE starting the potentially failing operation.
@@ -253,13 +254,15 @@ _perform_iterative_rebase() {
     echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
     echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
     echo "REMAINING_BRANCHES_TO_REBASE='${branches_to_rebase[*]}'" >> "$STATE_FILE"
-    echo "LAST_SUCCESSFUL_BASE='$initial_base'" >> "$STATE_FILE"
+    echo "LAST_SUCCESSFUL_REBASE_TARGET='$rebase_target'" >> "$STATE_FILE"
+    echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$parent_to_record'" >> "$STATE_FILE"
 
-    local current_base="$initial_base"
+    local current_rebase_target="$rebase_target"
+    local current_parent_to_record="$parent_to_record"
     local remaining_branches=("${branches_to_rebase[@]}")
 
     for branch in "${branches_to_rebase[@]}"; do
-        log_step "Rebasing '$branch' onto '$current_base'..."
+        log_step "Rebasing '$branch' onto '$current_rebase_target'..."
         git checkout "$branch" >/dev/null 2>&1
         local old_base
         old_base=$(get_parent_branch "$branch")
@@ -268,7 +271,7 @@ _perform_iterative_rebase() {
             exit 1
         fi
 
-        if ! git rebase --onto "$current_base" "$old_base" "$branch"; then
+        if ! git rebase --onto "$current_rebase_target" "$old_base" "$branch"; then
             echo ""
             log_error "Rebase conflict detected while rebasing '$branch'."
             log_info "Please follow these steps to resolve:"
@@ -279,29 +282,25 @@ _perform_iterative_rebase() {
             exit 1
         fi
         
-        local parent_for_count_check="$current_base"
-
         # --- On successful rebase, update the state file ---
-        local parent_to_set="$current_base"
-        # if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
-        #     parent_to_set="$BASE_BRANCH"
-        # fi
-        set_parent_branch "$branch" "$parent_to_set"
+        set_parent_branch "$branch" "$current_parent_to_record"
         
-        current_base="$branch"
+        current_rebase_target="$branch"
+        current_parent_to_record="$branch" # For subsequent branches, the parent is the branch itself.
         remaining_branches=("${remaining_branches[@]:1}") # Pop the first element
         
-        echo "LAST_SUCCESSFUL_BASE='$current_base'" >> "$STATE_FILE"
+        echo "LAST_SUCCESSFUL_REBASE_TARGET='$current_rebase_target'" >> "$STATE_FILE"
+        echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$current_parent_to_record'" >> "$STATE_FILE"
         echo "REMAINING_BRANCHES_TO_REBASE='${remaining_branches[*]}'" >> "$STATE_FILE"
 
 
         # Check if the rebase resulted in an empty branch and warn the user.
         local commit_count
-        commit_count=$(git rev-list --count "${parent_for_count_check}".."${branch}")
+        commit_count=$(git rev-list --count "${current_parent_to_record}".."${branch}")
         if [[ "$commit_count" -eq 0 ]]; then
             local pr_number_to_check
             pr_number_to_check=$(get_pr_number "$branch")
-            log_warning "After rebasing, branch '$branch' has no new changes compared to '$parent_for_count_check'."
+            log_warning "After rebasing, branch '$branch' has no new changes compared to '$current_parent_to_record'."
             if [[ -n "$pr_number_to_check" ]]; then
                 log_info "This can happen if changes from this branch were also introduced into its parent."
                 log_info "Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
@@ -928,7 +927,7 @@ cmd_restack() {
     fi
     
     log_info "Detected subsequent stack: ${branches_to_restack[*]}"
-    _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "${branches_to_restack[@]}"
+    _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "$original_branch" "${branches_to_restack[@]}"
     
     _finish_operation
 }
@@ -957,7 +956,7 @@ cmd_continue() {
         # --- Abort Detection ---
         # If the conflicted branch's history does NOT contain the last successful base,
         # it means the user must have aborted the rebase.
-        if ! git merge-base --is-ancestor "$LAST_SUCCESSFUL_BASE" "$conflicted_branch"; then
+        if ! git merge-base --is-ancestor "$LAST_SUCCESSFUL_REBASE_TARGET" "$conflicted_branch"; then
             log_warning "Rebase for '$conflicted_branch' was not completed."
             log_info "It appears 'git rebase --abort' may have been run."
             
@@ -983,22 +982,18 @@ cmd_continue() {
 
         # The rebase succeeded, so we must update its parent metadata.
         log_info "Updating metadata for resolved branch '$just_completed_branch'..."
-        
-        local parent_to_set="$LAST_SUCCESSFUL_BASE"
-        # if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
-        #     parent_to_set="$BASE_BRANCH"
-        # fi
-        set_parent_branch "$just_completed_branch" "$parent_to_set"
+        set_parent_branch "$just_completed_branch" "$LAST_SUCCESSFUL_PARENT_TO_RECORD"
 
         # The new base for the rest of the stack is the branch we just fixed.
-        local new_base="$just_completed_branch"
+        local new_rebase_target="$just_completed_branch"
+        local new_parent_to_record="$just_completed_branch"
         
         # The new list of branches to rebase is the rest of the array (the tail).
         local branches_to_resume=("${remaining_branches_array[@]:1}")
 
         # If there's more work to do, call the rebase function again with the smaller list.
         if [[ ${#branches_to_resume[@]} -gt 0 ]]; then
-            _perform_iterative_rebase "$COMMAND" "$ORIGINAL_BRANCH" "$MERGED_BRANCHES_TO_DELETE" "$new_base" "${branches_to_resume[@]}"
+            _perform_iterative_rebase "$COMMAND" "$ORIGINAL_BRANCH" "$MERGED_BRANCHES_TO_DELETE" "$new_rebase_target" "$new_parent_to_record" "${branches_to_resume[@]}"
         fi
     fi
 
@@ -1083,7 +1078,7 @@ cmd_sync() {
         
         local new_base="origin/$BASE_BRANCH"
         
-        _perform_iterative_rebase "sync" "$original_branch" "${merged_branches[*]}" "$new_base" "${unmerged_branches[@]}"
+        _perform_iterative_rebase "sync" "$original_branch" "${merged_branches[*]}" "$new_base" "$BASE_BRANCH" "${unmerged_branches[@]}"
         
         _finish_operation
 
@@ -1095,7 +1090,9 @@ cmd_sync() {
             echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
             echo "MERGED_BRANCHES_TO_DELETE='${merged_branches[*]}'" >> "$STATE_FILE"
             echo "REMAINING_BRANCHES_TO_REBASE=''" >> "$STATE_FILE"
-            echo "LAST_SUCCESSFUL_BASE='$BASE_BRANCH'" >> "$STATE_FILE"
+            echo "LAST_SUCCESSFUL_REBASE_TARGET='$BASE_BRANCH'" >> "$STATE_FILE"
+            echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$BASE_BRANCH'" >> "$STATE_FILE"
+
         fi
         _finish_operation
     fi
