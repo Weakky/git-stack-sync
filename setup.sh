@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 #
 # A bash function that reads an integer from a file, increments it by one,
 # and writes the new value back to the file.
@@ -35,12 +37,12 @@ increment_file_number() {
     echo "$((number + 1))" > "$filename"
 }
 
-./stgit.sh create br1
+./gss.sh create br1
 increment_file_number file1
 git commit -am "increment file1"
 git push origin br1
-./stgit.sh create br2
+./gss.sh create br2
 increment_file_number file1
 git commit -am "increment file1"
 git push origin br2
-./stgit.sh submit
+./gss.sh submit

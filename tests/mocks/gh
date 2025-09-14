@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # This is a mock of the 'gh' CLI for testing purposes.
-MOCK_STATE_DIR="/tmp/stgit_mock_gh_state"
+MOCK_STATE_DIR="/tmp/gss_mock_gh_state"
 mkdir -p "$MOCK_STATE_DIR"
 # Keep a counter for created PRs to ensure unique PR numbers.
 PR_COUNTER_FILE="$MOCK_STATE_DIR/pr_counter"

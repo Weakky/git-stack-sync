@@ -48,14 +48,14 @@ create_commit() {
 mock_pr_state() {
     local pr_number=$1
     local state=$2
-    local mock_state_dir="/tmp/stgit_mock_gh_state"
+    local mock_state_dir="/tmp/gss_mock_gh_state"
     mkdir -p "$mock_state_dir"
     echo "$state" > "$mock_state_dir/pr_${pr_number}_state"
 }
 
 # Mocks a failure response for a PR creation call.
 mock_pr_create_failure() {
-    local mock_state_dir="/tmp/stgit_mock_gh_state"
+    local mock_state_dir="/tmp/gss_mock_gh_state"
     mkdir -p "$mock_state_dir"
     # A simple flag file is enough to trigger the failure mode in the mock.
     touch "$mock_state_dir/pr_create_fail"
@@ -63,7 +63,7 @@ mock_pr_create_failure() {
 
 # Cleans up any state files created by the mock gh CLI.
 cleanup_mock_gh_state() {
-    rm -rf /tmp/stgit_mock_gh_state
+    rm -rf /tmp/gss_mock_gh_state
 }
 
 # Creates a stack of branches for testing.
@@ -72,7 +72,7 @@ create_stack() {
     local parent="main"
     for branch_name in "$@"; do
         run git checkout "$parent"
-        run "$STGIT_CMD" create "$branch_name"
+        run "$GSS_CMD" create "$branch_name"
         run create_commit "Commit for $branch_name"
         parent="$branch_name"
     done
@@ -88,7 +88,7 @@ get_all_branch_shas() {
 
 # --- Custom State Assertions ---
 
-# Asserts that a branch's parent is set to a specific branch in stgit config.
+# Asserts that a branch's parent is set to a specific branch in gss config.
 assert_branch_parent() {
     local child_branch=$1
     local expected_parent=$2
@@ -97,7 +97,7 @@ assert_branch_parent() {
     assert_output "$expected_parent"
 }
 
-# Asserts that a branch's PR number is set in the stgit config.
+# Asserts that a branch's PR number is set in the gss config.
 assert_branch_pr_number() {
     local branch_name=$1
     local expected_pr_number=$2

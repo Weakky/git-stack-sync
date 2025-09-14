@@ -6,10 +6,10 @@ _debug_header() {
     echo "--- DEBUG: $1 ---" >&2
 }
 
-# Dumps current git status, branch info, and stgit config.
+# Dumps current git status, branch info, and gss config.
 # This is extremely useful for seeing the state of the repo before/after a command.
 # All output goes to stderr so it doesn't interfere with `assert_output`.
-stgit_debug_dump() {
+gss_debug_dump() {
     local message=$1
     _debug_header "$message"
     echo "Current Branch: $(git rev-parse --abbrev-ref HEAD)" >&2
@@ -17,9 +17,9 @@ stgit_debug_dump() {
     git status --porcelain >&2
     echo "All Branches:" >&2
     git branch -vv >&2
-    echo "Stgit Parent Config:" >&2
+    echo "Gss Parent Config:" >&2
     git config --get-regexp 'branch\..*\.parent' >&2 || echo "  No parent config found." >&2
-    echo "Stgit PR Config:" >&2
+    echo "Gss PR Config:" >&2
     git config --get-regexp 'branch\..*\.pr-number' >&2 || echo "  No PR number config found." >&2
     echo "--- END DEBUG ---" >&2
     echo >&2

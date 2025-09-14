@@ -6,23 +6,23 @@ load 'test_helper'
 load 'debug' # Load the new debug helper
 
 # --- Variables and Pre-run Checks ---
-STGIT_CMD_BASE="$BATS_TEST_DIRNAME/../stgit"
-STGIT_CMD=""
+GSS_CMD_BASE="$BATS_TEST_DIRNAME/../gss"
+GSS_CMD=""
 
-# Auto-detect whether the script is named 'stgit' or 'stgit.sh'
-if [[ -f "$STGIT_CMD_BASE" ]]; then
-    STGIT_CMD="$STGIT_CMD_BASE"
-elif [[ -f "${STGIT_CMD_BASE}.sh" ]]; then
-    STGIT_CMD="${STGIT_CMD_BASE}.sh"
+# Auto-detect whether the script is named 'gss' or 'gss.sh'
+if [[ -f "$GSS_CMD_BASE" ]]; then
+    GSS_CMD="$GSS_CMD_BASE"
+elif [[ -f "${GSS_CMD_BASE}.sh" ]]; then
+    GSS_CMD="${GSS_CMD_BASE}.sh"
 else
-    echo "🔴 Error: Could not find the stgit script. Looked for '$STGIT_CMD_BASE' and '${STGIT_CMD_BASE}.sh'." >&2
+    echo "🔴 Error: Could not find the gss script. Looked for '$GSS_CMD_BASE' and '${GSS_CMD_BASE}.sh'." >&2
     exit 1
 fi
 
 # Check if the found script is executable
-if [[ ! -x "$STGIT_CMD" ]]; then
-    echo "🔴 Error: The stgit script found at '$STGIT_CMD' is not executable." >&2
-    echo "💡 Please run 'chmod +x ${STGIT_CMD##*/}' to fix this." >&2
+if [[ ! -x "$GSS_CMD" ]]; then
+    echo "🔴 Error: The gss script found at '$GSS_CMD' is not executable." >&2
+    echo "💡 Please run 'chmod +x ${GSS_CMD##*/}' to fix this." >&2
     exit 1
 fi
 
@@ -39,12 +39,12 @@ teardown() {
     # If the test failed, print detailed debug info.
     if [ "$BATS_TEST_STATUS" -ne 0 ]; then
         echo "Teardown: Test failed. Dumping state..." >&2
-        stgit_debug_dump "State at time of failure"
+        gss_debug_dump "State at time of failure"
         
         echo "--- MOCK GH STATE ---" >&2
-        if [ -d "/tmp/stgit_mock_gh_state" ] && [ -n "$(ls -A /tmp/stgit_mock_gh_state)" ]; then
-            ls -l /tmp/stgit_mock_gh_state/ >&2
-            cat /tmp/stgit_mock_gh_state/* >&2
+        if [ -d "/tmp/gss_mock_gh_state" ] && [ -n "$(ls -A /tmp/gss_mock_gh_state)" ]; then
+            ls -l /tmp/gss_mock_gh_state/ >&2
+            cat /tmp/gss_mock_gh_state/* >&2
         else
             echo "  (no mock state found)" >&2
         fi
@@ -54,9 +54,9 @@ teardown() {
     cleanup_mock_gh_state
 }
 
-# --- Tests for 'stgit create' ---
+# --- Tests for 'gss create' ---
 @test "create: creates a new child branch" {
-    run "$STGIT_CMD" create feature-a
+    run "$GSS_CMD" create feature-a
     assert_success
     assert_output --partial "Created and checked out new branch 'feature-a'"
 
@@ -68,11 +68,11 @@ teardown() {
 
 @test "create: creates a nested child branch" {
     # Setup: Create the first branch in the stack
-    run "$STGIT_CMD" create feature-a
+    run "$GSS_CMD" create feature-a
     assert_success
     
     # Action: Create the nested branch
-    run "$STGIT_CMD" create feature-b
+    run "$GSS_CMD" create feature-b
     assert_success
     assert_output --partial "Created and checked out new branch 'feature-b'"
 
@@ -85,25 +85,25 @@ teardown() {
 # --- Tests for commands on the base branch ---
 @test "next: fails when run on the base branch" {
     # Setup: We are on 'main' by default
-    run "$STGIT_CMD" next
+    run "$GSS_CMD" next
     assert_failure
     assert_output --partial "command cannot be run from the base branch"
 }
 
 @test "status: fails when run on the base branch and lists stacks" {
     # Setup a stack to be listed
-    run "$STGIT_CMD" create feature-a
-    run "$STGIT_CMD" create feature-b
+    run "$GSS_CMD" create feature-a
+    run "$GSS_CMD" create feature-b
     run git checkout main
 
     # Action
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
     assert_failure
     assert_output --partial "Found 1 stack(s):"
     assert_output --partial "- feature-a (2 branches)"
 }
 
-# --- Tests for 'stgit sync' ---
+# --- Tests for 'gss sync' ---
 @test "sync: simple sync with no merged branches" {
     # This test verifies the most basic 'sync' scenario.
     # A stack of branches exists, and the base branch ('main') gets a new commit.
@@ -118,7 +118,7 @@ teardown() {
     run git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" sync
+    run "$GSS_CMD" sync
     
     # Assertions
     assert_success
@@ -142,7 +142,7 @@ teardown() {
     git checkout feature-b
 
     # Action: Run sync with --yes to auto-confirm branch deletion
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -159,11 +159,11 @@ teardown() {
 @test "sync: full workflow after a squash merge" {
     # This is an end-to-end test that covers the most common, complex workflow:
     # 1. A parent branch is squash-merged via the GitHub UI.
-    # 2. `stgit status` correctly diagnoses the stale stack and prescribes `stgit sync`.
-    # 3. `stgit sync` correctly updates the local base branch and the stack.
-    # 4. `stgit status` now correctly prescribes `stgit push`.
-    # 5. `stgit push` updates the remote.
-    # 6. `stgit status` confirms the stack is fully clean.
+    # 2. `gss status` correctly diagnoses the stale stack and prescribes `gss sync`.
+    # 3. `gss sync` correctly updates the local base branch and the stack.
+    # 4. `gss status` now correctly prescribes `gss push`.
+    # 5. `gss push` updates the remote.
+    # 6. `gss status` confirms the stack is fully clean.
 
     # Setup
     create_stack br1 br2
@@ -172,7 +172,7 @@ teardown() {
     git config branch.br2.pr-number 11
     mock_pr_state 10 OPEN
     mock_pr_state 11 OPEN
-    run "$STGIT_CMD" push --yes # Push the initial state
+    run "$GSS_CMD" push --yes # Push the initial state
 
     # Now, simulate the squash merge of br1
     mock_pr_state 10 MERGED
@@ -187,33 +187,33 @@ teardown() {
     run git checkout br2
 
     # 1. First status check: Diagnose the problem
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
     assert_success
     assert_output --partial "main (🟡 Behind by 1)"
     assert_output --partial "PR:     🟣 #10: MERGED"
-    assert_output --partial "Run 'stgit sync' to clean up and rebase the stack"
+    assert_output --partial "Run 'gss sync' to update the base and rebase the stack."
 
     # 2. Run sync to fix the stack
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
     assert_success
     assert_output --partial "Deleted local branch 'br1'"
-    assert_output --partial "Next step: Run 'stgit push'"
+    assert_output --partial "Next step: Run 'gss push'"
     assert_branch_parent br2 main
     assert_commit_is_ancestor "$new_main_sha" br2
 
     # 3. Second status check: Diagnose the next step
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
     assert_success
     assert_output --partial "Status: 🟡 Needs push (local history has changed)"
-    assert_output --partial "Run 'stgit push' to update the remote"
+    assert_output --partial "Run 'gss push' to update the remote"
     
     # 4. Push the changes
-    run "$STGIT_CMD" push --yes
+    run "$GSS_CMD" push --yes
     assert_success
     assert_remote_branch_matches_local br2
 
     # 5. Final status check: Confirm everything is clean
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
     assert_success
     assert_output --partial "Status: 🟢 Synced"
     assert_output --partial "Stack is up to date"
@@ -223,7 +223,7 @@ teardown() {
 @test "sync: avoids conflicts when parent was squash-merged" {
     # This tests a critical real-world scenario. If a parent branch (`br1`) is
     # squash-merged into `main`, its commits are squashed into a new commit on `main`.
-    # `stgit sync` must be smart enough to rebase the child (`br2`) onto `main`
+    # `gss sync` must be smart enough to rebase the child (`br2`) onto `main`
     # without trying to re-apply the commits that were already squashed, which would
     # cause a rebase conflict.
     
@@ -240,7 +240,7 @@ teardown() {
     run git checkout br2
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success # The key assertion is that this command does not fail.
@@ -257,7 +257,7 @@ teardown() {
     
     # Setup
     create_commit "conflict-file" "line 1" "file.txt"
-    run "$STGIT_CMD" create feature-a
+    run "$GSS_CMD" create feature-a
     create_commit "feature-a changes" "line 2" "file.txt"
     run git checkout main
     create_commit "main changes" "line one" "file.txt"
@@ -265,29 +265,29 @@ teardown() {
     run git checkout feature-a
 
     # Action
-    run "$STGIT_CMD" sync
+    run "$GSS_CMD" sync
 
     # Assertions
     assert_failure
     assert_output --partial "Rebase conflict detected"
-    assert_output --partial "run 'stgit continue'"
+    assert_output --partial "run 'gss continue'"
     
     # --- State Assertions ---
-    # A state file should exist to allow 'stgit continue' to resume.
-    assert [ -f ".git/STGIT_OPERATION_STATE" ]
-    run cat ".git/STGIT_OPERATION_STATE"
+    # A state file should exist to allow 'gss continue' to resume.
+    assert [ -f ".git/GSS_OPERATION_STATE" ]
+    run cat ".git/GSS_OPERATION_STATE"
     assert_output --partial "COMMAND='sync'"
     assert_output --partial "ORIGINAL_BRANCH='feature-a'"
 }
 
 @test "sync: 'continue' resumes after a sync conflict" {
     # This tests the second half of the conflict resolution workflow: after a
-    # user manually resolves a rebase conflict, 'stgit continue' should
+    # user manually resolves a rebase conflict, 'gss continue' should
     # successfully finish the operation.
     
     # Setup: Create a conflict
     create_commit "conflict-file" "line 1" "file.txt"
-    run "$STGIT_CMD" create feature-a
+    run "$GSS_CMD" create feature-a
     create_commit "feature-a changes" "line 2" "file.txt"
     run git checkout main
     create_commit "main changes" "line one" "file.txt"
@@ -295,7 +295,7 @@ teardown() {
     run git push origin main
     run git checkout feature-a
     # Run sync, which is expected to fail
-    run "$STGIT_CMD" sync
+    run "$GSS_CMD" sync
 
     # Manual conflict resolution
     echo "resolved" > file.txt
@@ -308,14 +308,14 @@ teardown() {
     GIT_EDITOR=true run git rebase --continue
 
     # Action
-    run "$STGIT_CMD" continue --yes
+    run "$GSS_CMD" continue --yes
 
     # Assertions
     assert_success
     assert_output --partial "Operation complete."
     
     # --- State Assertions ---
-    refute [ -f ".git/STGIT_OPERATION_STATE" ]
+    refute [ -f ".git/GSS_OPERATION_STATE" ]
     run git rev-parse --abbrev-ref HEAD
     assert_output "feature-a"
     assert_commit_is_ancestor "$main_sha" feature-a
@@ -336,7 +336,7 @@ teardown() {
     git checkout feature-d
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -366,7 +366,7 @@ teardown() {
     git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
     
     # Assertions
     assert_success
@@ -384,7 +384,7 @@ teardown() {
 
 @test "sync: detects merged branch without a PR" {
     # This tests the fallback mechanism for detecting merged branches. If a
-    # branch was merged directly into the base branch without a PR (or if stgit
+    # branch was merged directly into the base branch without a PR (or if gss
     # doesn't know the PR number), it should still be detected as merged and
     # cleaned up.
     
@@ -397,7 +397,7 @@ teardown() {
     run git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -423,7 +423,7 @@ teardown() {
     git checkout feature-c
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -454,7 +454,7 @@ teardown() {
     git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -480,7 +480,7 @@ teardown() {
     git checkout feature-b # Start from the middle
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -500,7 +500,7 @@ teardown() {
     # 'sync' should just perform a standard rebase against the updated base branch.
     
     # Setup
-    run "$STGIT_CMD" create feature-a
+    run "$GSS_CMD" create feature-a
     run create_commit "commit for feature-a"
     run git checkout main
     run create_commit "new base commit"
@@ -509,7 +509,7 @@ teardown() {
     run git checkout feature-a
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -530,7 +530,7 @@ teardown() {
     git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" sync --yes
+    run "$GSS_CMD" sync --yes
 
     # Assertions
     assert_success
@@ -545,7 +545,7 @@ teardown() {
     assert_output "feature-b"
 }
 
-# --- Tests for 'stgit restack' ---
+# --- Tests for 'gss restack' ---
 @test "restack: rebases child branches after an amend" {
     # This is the primary use case for `restack`. After amending a commit on a
     # parent branch, the child branches need to be rebased on top of the new commit.
@@ -560,7 +560,7 @@ teardown() {
     local new_b_sha; new_b_sha=$(git rev-parse HEAD)
 
     # Action
-    run "$STGIT_CMD" restack
+    run "$GSS_CMD" restack
 
     # Assertions
     assert_success
@@ -585,7 +585,7 @@ teardown() {
     local new_a_sha; new_a_sha=$(git rev-parse HEAD)
 
     # Action
-    run "$STGIT_CMD" restack
+    run "$GSS_CMD" restack
 
     # Assertions
     assert_success
@@ -608,7 +608,7 @@ teardown() {
     run git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" restack
+    run "$GSS_CMD" restack
 
     # Assertions
     assert_success
@@ -638,15 +638,15 @@ teardown() {
     run git commit --amend --no-edit
 
     # Action
-    run "$STGIT_CMD" restack
+    run "$GSS_CMD" restack
     
     # Assertions
     assert_failure
     assert_output --partial "Rebase conflict detected"
 
     # --- State Assertions ---
-    assert [ -f ".git/STGIT_OPERATION_STATE" ]
-    run cat ".git/STGIT_OPERATION_STATE"
+    assert [ -f ".git/GSS_OPERATION_STATE" ]
+    run cat ".git/GSS_OPERATION_STATE"
     assert_output --partial "COMMAND='restack'"
     assert_output --partial "ORIGINAL_BRANCH='feature-a'"
 }
@@ -664,7 +664,7 @@ teardown() {
     run git commit --amend --no-edit
     local new_a_sha; new_a_sha=$(git rev-parse HEAD)
     # Run restack, which is expected to fail
-    run "$STGIT_CMD" restack
+    run "$GSS_CMD" restack
 
     # Manual conflict resolution
     echo "resolved" > conflict.txt
@@ -672,13 +672,13 @@ teardown() {
     GIT_EDITOR=true run git rebase --continue
 
     # Action
-    run "$STGIT_CMD" continue
+    run "$GSS_CMD" continue
 
     # Assertions
     assert_success
 
     # --- State Assertions ---
-    refute [ -f ".git/STGIT_OPERATION_STATE" ]
+    refute [ -f ".git/GSS_OPERATION_STATE" ]
     assert_commit_is_ancestor "$new_a_sha" feature-b
     run git rev-parse --abbrev-ref HEAD
     assert_output "feature-a" # Should return to original branch
@@ -692,9 +692,9 @@ teardown() {
     
     # Setup
     # 1. Create the stack structure without initial commits from the helper.
-    run "$STGIT_CMD" create feature-a
-    run "$STGIT_CMD" create feature-b
-    run "$STGIT_CMD" create feature-c
+    run "$GSS_CMD" create feature-a
+    run "$GSS_CMD" create feature-b
+    run "$GSS_CMD" create feature-c
     run git checkout feature-b
 
     # 2. Create the specific commit on feature-b that will be made redundant.
@@ -710,7 +710,7 @@ teardown() {
     local new_a_sha; new_a_sha=$(git rev-parse HEAD)
 
     # Action
-    run "$STGIT_CMD" restack
+    run "$GSS_CMD" restack
 
     # Assertions
     assert_success
@@ -729,14 +729,14 @@ teardown() {
     # If run at any other time, it should inform the user and exit cleanly.
     
     # Action
-    run "$STGIT_CMD" continue
+    run "$GSS_CMD" continue
 
     # Assertions
     assert_success
-    assert_output --partial "No stgit operation to continue. Nothing to do."
+    assert_output --partial "No gss operation to continue. Nothing to do."
 }
 
-# --- Tests for 'stgit insert' ---
+# --- Tests for 'gss insert' ---
 @test "insert: inserts a branch in the middle of a stack" {
     # This test verifies that inserting a new branch (`feature-b`) between two
     # existing branches (`feature-a` and `feature-c`) correctly updates the
@@ -750,7 +750,7 @@ teardown() {
     run git checkout feature-a
 
     # Action
-    run "$STGIT_CMD" insert feature-b
+    run "$GSS_CMD" insert feature-b
 
     # Assertions
     assert_success
@@ -774,7 +774,7 @@ teardown() {
     run git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" insert feature-c
+    run "$GSS_CMD" insert feature-c
 
     # Assertions
     assert_success
@@ -796,7 +796,7 @@ teardown() {
     local c_sha_before; c_sha_before=$(git rev-parse HEAD)
 
     # Action
-    run "$STGIT_CMD" insert --before feature-b
+    run "$GSS_CMD" insert --before feature-b
 
     # Assertions
     assert_success
@@ -820,7 +820,7 @@ teardown() {
     local b_sha_before; b_sha_before=$(git rev-parse HEAD)
 
     # Action
-    run "$STGIT_CMD" insert --before feature-a
+    run "$GSS_CMD" insert --before feature-a
 
     # Assertions
     assert_success
@@ -844,7 +844,7 @@ teardown() {
     run git checkout feature-a
 
     # Action
-    run "$STGIT_CMD" insert feature-b
+    run "$GSS_CMD" insert feature-b
 
     # Assertions
     assert_success
@@ -855,7 +855,7 @@ teardown() {
     assert_branch_parent feature-c feature-b
 }
 
-# --- Tests for 'stgit push' ---
+# --- Tests for 'gss push' ---
 @test "push: pushes a multi-branch stack" {
     # This is the standard use case: push all local branches in the current
     # stack to the remote.
@@ -867,7 +867,7 @@ teardown() {
     run git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" push --yes
+    run "$GSS_CMD" push --yes
 
     # Assertions
     assert_success
@@ -885,12 +885,12 @@ teardown() {
     # This tests that the command works correctly for the simplest case.
     
     # Setup
-    run "$STGIT_CMD" create feature-a
+    run "$GSS_CMD" create feature-a
     run create_commit "commit-a"
     local a_sha; a_sha=$(git rev-parse feature-a)
 
     # Action
-    run "$STGIT_CMD" push --yes
+    run "$GSS_CMD" push --yes
 
     # Assertions
     assert_success
@@ -907,17 +907,17 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b
-    run "$STGIT_CMD" push --yes # Initial push
+    run "$GSS_CMD" push --yes # Initial push
     run git checkout main
     run create_commit "new base commit"
     run git push origin main
     run git checkout feature-b
-    run "$STGIT_CMD" sync # This rebases feature-a and feature-b
+    run "$GSS_CMD" sync # This rebases feature-a and feature-b
     local new_a_sha; new_a_sha=$(git rev-parse feature-a)
     local new_b_sha; new_b_sha=$(git rev-parse feature-b)
 
     # Action
-    run "$STGIT_CMD" push --yes
+    run "$GSS_CMD" push --yes
 
     # Assertions
     assert_success
@@ -939,7 +939,7 @@ teardown() {
     
     # Action: Use a here-string to provide 'n' to the confirmation prompt.
     # This is more robust than using a pipe with echo.
-    run "$STGIT_CMD" push <<< "n"
+    run "$GSS_CMD" push <<< "n"
     
     # Assertions
     assert_success
@@ -951,7 +951,7 @@ teardown() {
     assert_failure
 }
 
-# --- Tests for 'stgit submit' ---
+# --- Tests for 'gss submit' ---
 @test "submit: creates PRs for a multi-branch stack" {
     # This is the standard use case: create PRs for all branches in the stack
     # that don't already have one.
@@ -961,7 +961,7 @@ teardown() {
     run git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" submit
+    run "$GSS_CMD" submit
 
     # Assertions
     assert_success
@@ -984,7 +984,7 @@ teardown() {
     run git checkout feature-b
 
     # Action
-    run "$STGIT_CMD" submit
+    run "$GSS_CMD" submit
 
     # Assertions
     assert_success
@@ -1001,12 +1001,12 @@ teardown() {
     # from its parent), the command should not create a PR for it.
     
     # Setup
-    run "$STGIT_CMD" create feature-a
+    run "$GSS_CMD" create feature-a
     run create_commit "commit for a"
-    run "$STGIT_CMD" create feature-b # No commit on feature-b
+    run "$GSS_CMD" create feature-b # No commit on feature-b
 
     # Action
-    run "$STGIT_CMD" submit
+    run "$GSS_CMD" submit
 
     # Assertions
     assert_success
@@ -1026,7 +1026,7 @@ teardown() {
     run git checkout feature-b # Start from the middle
 
     # Action
-    run "$STGIT_CMD" submit
+    run "$GSS_CMD" submit
 
     # Assertions
     assert_success
@@ -1046,7 +1046,7 @@ teardown() {
     mock_pr_create_failure # Tell the mock to fail the next PR creation
 
     # Action
-    run "$STGIT_CMD" submit
+    run "$GSS_CMD" submit
 
     # Assertions
     assert_failure
@@ -1057,7 +1057,7 @@ teardown() {
     assert_branch_has_no_pr_number feature-a
 }
 
-# --- Tests for 'stgit status' ---
+# --- Tests for 'gss status' ---
 @test "status: displays a clean, up-to-date stack" {
     # This tests the ideal state: all local branches are synced with their
     # parents and remotes, and all have open PRs.
@@ -1068,12 +1068,12 @@ teardown() {
     git config branch.feature-b.pr-number 11
     mock_pr_state 10 OPEN
     mock_pr_state 11 OPEN
-    run "$STGIT_CMD" push --yes
+    run "$GSS_CMD" push --yes
     run git checkout feature-a # Explicitly checkout the branch to test
     local shas_before; shas_before=$(get_all_branch_shas)
 
     # Action
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
 
     # Assertions
     assert_success
@@ -1099,13 +1099,13 @@ teardown() {
     local shas_before; shas_before=$(get_all_branch_shas)
 
     # Action
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
 
     # Assertions
     assert_success
     assert_output --partial "Status: ⚪ Not on remote"
     assert_output --partial "PR:     ⚪ No PR submitted"
-    assert_output --partial "Run 'stgit push' to update the remote."
+    assert_output --partial "Run 'gss push' to update the remote."
 
     # --- State Assertions ---
     local shas_after; shas_after=$(get_all_branch_shas)
@@ -1125,12 +1125,12 @@ teardown() {
     local shas_before; shas_before=$(get_all_branch_shas)
 
     # Action
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
 
     # Assertions
     assert_success
     assert_output --partial "Status: 🟡 Behind 'main'"
-    assert_output --partial "Run 'stgit sync' to update the entire stack."
+    assert_output --partial "Run 'gss sync' to update the base and rebase the stack."
 
     # --- State Assertions ---
     local shas_after; shas_after=$(get_all_branch_shas)
@@ -1150,13 +1150,13 @@ teardown() {
     local shas_before; shas_before=$(get_all_branch_shas)
 
     # Action
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
 
     # Assertions
     assert_success
     assert_output --partial "feature-b *"
     assert_output --partial "Status: 🟡 Behind 'feature-a'"
-    assert_output --partial "Run 'stgit restack' from the out-of-date branch"
+    assert_output --partial "Run 'gss restack' from the out-of-date branch"
 
     # --- State Assertions ---
     local shas_after; shas_after=$(get_all_branch_shas)
@@ -1176,13 +1176,13 @@ teardown() {
     local shas_before; shas_before=$(get_all_branch_shas)
 
     # Action
-    run "$STGIT_CMD" status
+    run "$GSS_CMD" status
 
     # Assertions
     assert_success
     assert_output --partial "PR:     🟣 #10: MERGED"
     assert_output --partial "PR:     🔴 #11: CLOSED"
-    assert_output --partial "Run 'stgit sync' to clean up and rebase the stack"
+    assert_output --partial "Run 'gss sync' to update the base and rebase the stack."
 
     # --- State Assertions ---
     local shas_after; shas_after=$(get_all_branch_shas)

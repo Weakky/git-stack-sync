@@ -1,12 +1,12 @@
 #!/bin/bash
-# stgit - A simple CLI for managing stacked Git branches.
-# Inspired by Graphite's workflow and the --update-refs feature.
+# gss - A CLI for managing stacked Git branches.
+# Inspired by Graphite's workflow
 
 set -e
 
 # --- Internal State ---
-STATE_FILE=".git/STGIT_OPERATION_STATE"
-CONFIG_CACHE_FILE=".git/STGIT_CONFIG_CACHE"
+STATE_FILE=".git/GSS_OPERATION_STATE"
+CONFIG_CACHE_FILE=".git/GSS_CONFIG_CACHE"
 AUTO_CONFIRM=false # Global flag for --yes
 
 # --- Color Constants ---
@@ -277,7 +277,7 @@ _perform_iterative_rebase() {
             log_info "1. Open the conflicting files and resolve the issues."
             log_info "2. Run 'git add <resolved-files>'."
             log_info "3. Run 'git rebase --continue'."
-            log_info "4. Once the git rebase process is fully complete, run 'stgit continue'."
+            log_info "4. Once the git rebase process is fully complete, run 'gss continue'."
             exit 1
         fi
         
@@ -389,7 +389,7 @@ _finish_operation() {
 
     rm -f "$STATE_FILE"
     log_success "Operation complete."
-    log_suggestion "Run 'stgit push' to update your remote branches."
+    log_suggestion "Run 'gss push' to update your remote branches."
 }
 
 # (New) A centralized guard for commands that require a tracked branch.
@@ -408,9 +408,9 @@ _guard_context() {
     parent=$(git config --get "branch.${current_branch}.parent" || echo "")
     if [[ -z "$parent" ]]; then
         log_error "The '$command_name' command requires a tracked branch."
-        log_info "Branch '$current_branch' is not currently tracked by stgit."
-        log_suggestion "To start a new stack, run 'stgit create <branch-name>'."
-        log_suggestion "To track an existing branch, run 'stgit track set <parent-branch>'."
+        log_info "Branch '$current_branch' is not currently tracked by gss."
+        log_suggestion "To start a new stack, run 'gss create <branch-name>'."
+        log_suggestion "To track an existing branch, run 'gss track set <parent-branch>'."
         exit 1
     fi
 }
@@ -472,7 +472,7 @@ _cmd_track_remove() {
     commit_count=$(git rev-list --count "${parent}".."${current_branch}")
     if [[ "$commit_count" -gt 0 ]]; then
         log_error "Cannot untrack '$current_branch' because it contains unique commits."
-        log_suggestion "To integrate these changes, consider running 'stgit squash'."
+        log_suggestion "To integrate these changes, consider running 'gss squash'."
         exit 1
     fi
     
@@ -498,7 +498,7 @@ cmd_track() {
         remove) _cmd_track_remove "$@";;
         "")
             log_error "A sub-command is required for 'track'."
-            log_info "Usage: stgit track <set|remove> [options]"
+            log_info "Usage: gss track <set|remove> [options]"
             cmd_help
             exit 1
             ;;
@@ -533,7 +533,7 @@ cmd_amend() {
         # If there are descendants, they need to be rebased. The restack command handles this.
         cmd_restack
     else
-        log_suggestion "Run 'stgit push' to update the remote."
+        log_suggestion "Run 'gss push' to update the remote."
     fi
 }
 
@@ -668,15 +668,15 @@ cmd_squash() {
     log_success "Successfully squashed '$branch_to_squash' into '$target_branch'."
     
     if [[ -n "$grand_child" ]]; then
-        log_suggestion "Run 'stgit restack' to update descendant branches."
+        log_suggestion "Run 'gss restack' to update descendant branches."
     else
-        log_suggestion "Run 'stgit push' to update the remote with your changes."
+        log_suggestion "Run 'gss push' to update the remote with your changes."
     fi
 }
 
 
 cmd_clean() {
-    log_warning "You are about to permanently delete all stgit metadata for this repository."
+    log_warning "You are about to permanently delete all gss metadata for this repository."
     log_info "This includes the configuration cache and any saved state for interrupted commands."
     log_info "This will NOT delete your branches or commits."
 
@@ -690,7 +690,7 @@ cmd_clean() {
         fi
     fi
 
-    log_step "Cleaning stgit metadata..."
+    log_step "Cleaning gss metadata..."
     if [[ -f "$CONFIG_CACHE_FILE" ]]; then
         rm -f "$CONFIG_CACHE_FILE"
         log_info "Removed configuration cache."
@@ -706,7 +706,7 @@ cmd_clean() {
 cmd_create() {
     if [[ -z "$1" ]]; then
         log_error "Branch name is required."
-        log_info "Usage: stgit create <branch-name>"
+        log_info "Usage: gss create <branch-name>"
         exit 1
     fi
 
@@ -717,7 +717,7 @@ cmd_create() {
     git checkout -b "$new_branch" >/dev/null 2>&1
     set_parent_branch "$new_branch" "$parent_branch"
     log_success "Created and checked out new branch '$new_branch' (parent: '$parent_branch')."
-    log_suggestion "Add commits or run 'stgit create <next-branch>' to extend the stack."
+    log_suggestion "Add commits or run 'gss create <next-branch>' to extend the stack."
 }
 
 cmd_insert() {
@@ -731,7 +731,7 @@ cmd_insert() {
 
     if [[ -z "$1" ]]; then
         log_error "Branch name is required."
-        log_info "Usage: stgit insert [--before] <branch-name>"
+        log_info "Usage: gss insert [--before] <branch-name>"
         exit 1
     fi
     local new_branch_name=$1
@@ -767,7 +767,7 @@ cmd_insert() {
 
     git checkout "$new_branch_name" >/dev/null 2>&1
     log_success "Successfully inserted '$new_branch_name' into the stack."
-    log_suggestion "Add commits, then run 'stgit submit' to create a PR."
+    log_suggestion "Add commits, then run 'gss submit' to create a PR."
 }
 
 cmd_submit() {
@@ -835,8 +835,8 @@ cmd_submit() {
 }
 
 
-cmd_next() {
-    _guard_context "next"
+cmd_up() {
+    _guard_context "up"
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -851,8 +851,8 @@ cmd_next() {
     fi
 }
 
-cmd_prev() {
-    _guard_context "prev"
+cmd_down() {
+    _guard_context "down"
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -896,12 +896,12 @@ cmd_restack() {
 cmd_continue() {
     if [ -d ".git/rebase-merge" ] || [ -d ".git/rebase-apply" ]; then
         log_error "A git rebase is still in progress."
-        log_suggestion "Run 'git rebase --continue' until it is complete, then run 'stgit continue'."
+        log_suggestion "Run 'git rebase --continue' until it is complete, then run 'gss continue'."
         exit 1
     fi
     
     if [ ! -f "$STATE_FILE" ]; then
-        log_warning "No stgit operation to continue. Nothing to do."
+        log_warning "No gss operation to continue. Nothing to do."
         return
     fi
 
@@ -1066,69 +1066,8 @@ cmd_pr() {
         gh pr view "$pr_number" --web
     else
         log_error "No pull request found for branch '$current_branch'."
-        log_suggestion "Run 'stgit submit' to create one."
+        log_suggestion "Run 'gss submit' to create one."
     fi
-}
-
-cmd_delete() {
-    _guard_context "delete"
-    check_gh_auth
-    local branch_to_delete
-    branch_to_delete=$(get_current_branch)
-
-    local parent
-    parent=$(get_parent_branch "$branch_to_delete")
-    local child
-    child=$(get_child_branch "$branch_to_delete")
-
-    if [[ -z "$parent" ]]; then
-        log_error "Cannot determine parent of '$branch_to_delete'. Is it part of a stack?"
-        exit 1
-    fi
-
-    log_warning "You are about to permanently delete branch '$branch_to_delete'."
-    if [[ "$AUTO_CONFIRM" != true ]]; then
-        log_prompt "This action cannot be undone. Are you sure you want to continue?"
-        read -p "(y/N) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log_warning "Deletion cancelled."
-            exit 0
-        fi
-    fi
-    
-    # Reparent and rebase the child stack if it exists
-    if [[ -n "$child" ]]; then
-        _rebase_sub_stack_and_update_pr "$parent" "$child"
-    fi
-
-    local pr_number
-    pr_number=$(get_pr_number "$branch_to_delete")
-    if [[ -n "$pr_number" ]]; then
-        local close_pr=false
-        if [[ "$AUTO_CONFIRM" == true ]]; then
-            close_pr=true
-        else
-            log_prompt "Do you want to close the associated GitHub PR #${pr_number}?"
-            read -p "(y/N) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                close_pr=true
-            fi
-        fi
-
-        if [[ "$close_pr" == true ]]; then
-            log_step "Closing PR #${pr_number} on GitHub..."
-            gh pr close "$pr_number"
-            log_success "PR #${pr_number} closed."
-        fi
-    fi
-
-    log_step "Deleting branch '$branch_to_delete' locally and on remote..."
-    git checkout "$parent" >/dev/null 2>&1
-    git branch -D "$branch_to_delete" >/dev/null 2>&1
-    git push origin --delete "$branch_to_delete" >/dev/null 2>&1
-    log_success "Branch '$branch_to_delete' deleted successfully."
 }
 
 cmd_list() {
@@ -1138,8 +1077,8 @@ cmd_list() {
     bottoms=($(get_all_stack_bottoms))
     
     if [ ${#bottoms[@]} -eq 0 ]; then
-        log_warning "No stgit stacks found."
-        log_suggestion "Run 'stgit create <branch-name>' from '$BASE_BRANCH' to start a new stack."
+        log_warning "No gss stacks found."
+        log_suggestion "Run 'gss create <branch-name>' from '$BASE_BRANCH' to start a new stack."
         return
     fi
 
@@ -1178,7 +1117,7 @@ cmd_status() {
 
     if [ ${#stack_branches[@]} -eq 0 ]; then
         log_warning "Not currently in a stack. Nothing to show."
-        log_suggestion "Run 'stgit create <branch-name>' to start a new stack."
+        log_suggestion "Run 'gss create <branch-name>' to start a new stack."
         return
     fi
 
@@ -1289,16 +1228,16 @@ cmd_status() {
     # --- Final Summary Logic ---
     if [[ "$stack_has_merged_branches" == true || "$base_behind" -gt 0 || "$stack_is_out_of_sync_with_base" == true ]]; then
         log_warning "The stack contains merged branches or is behind the base branch."
-        log_suggestion "Run 'stgit sync' to clean up and rebase the stack."
+        log_suggestion "Run 'gss sync' to update the base and rebase the stack."
     elif [[ "$stack_needs_restack" == true ]]; then
         log_warning "A branch in the stack is behind its parent."
-        log_suggestion "Run 'stgit restack' from the out-of-date branch or 'stgit sync' for the whole stack."
+        log_suggestion "Run 'gss restack' from the out-of-date branch or 'gss sync' for the whole stack."
     elif [[ "$stack_needs_push" == true ]]; then
         log_warning "One or more local branches have changed."
-        log_suggestion "Run 'stgit push' to update the remote."
+        log_suggestion "Run 'gss push' to update the remote."
     elif [[ "$stack_needs_submit" == true ]]; then
         log_warning "One or more branches are missing a pull request."
-        log_suggestion "Run 'stgit submit' to create them."
+        log_suggestion "Run 'gss submit' to create them."
     else
         log_success "Stack is up to date with '$BASE_BRANCH' and remote."
     fi
@@ -1306,9 +1245,9 @@ cmd_status() {
 
 # --- Help and Main Dispatcher ---
 cmd_help() {
-    echo "stgit - A tool for managing stacked Git branches with GitHub integration."
+    echo "gss - A tool for managing stacked Git branches with GitHub integration."
     echo ""
-    echo "Usage: stgit [options] <command> [args]"
+    echo "Usage: gss [options] <command> [args]"
     echo ""
     echo "Options:"
     echo "  -y, --yes              Automatically answer 'yes' to all prompts."
@@ -1332,7 +1271,7 @@ cmd_help() {
     echo "  sync                   Syncs the stack: rebases onto the latest base branch"
     echo "                         and cleans up any merged parent branches."
     echo "  push                   Force-push all branches in the current stack to the remote."
-    echo "  continue               Resume and finalize an stgit operation after a rebase conflict."
+    echo "  continue               Resume and finalize an gss operation after a rebase conflict."
     echo ""
     echo "Inspection & Navigation:"
     echo "  status                 Display the status of the current branch stack."
@@ -1345,7 +1284,7 @@ cmd_help() {
     echo "  pr                     Open the GitHub PR for the current branch in your browser."
     echo ""
     echo "Housekeeping:"
-    echo "  clean                  Remove all stgit metadata from the repository."
+    echo "  clean                  Remove all gss metadata from the repository."
     echo "  help                   Show this help message."
     echo ""
 }
@@ -1380,7 +1319,7 @@ main() {
     # This uses slicing to get all elements from index 1 onwards.
     local cmd_args=("${all_args[@]:1}")
 
-    # If no command was provided (e.g., only `stgit --yes`), show help and exit.
+    # If no command was provided (e.g., only `gss --yes`), show help and exit.
     if [[ -z "$command" ]]; then
         cmd_help
         exit 0
@@ -1394,17 +1333,16 @@ main() {
         amend) cmd_amend "${cmd_args[@]}";;
         clean) cmd_clean "${cmd_args[@]}";;
         create) cmd_create "${cmd_args[@]}";;
-        delete) cmd_delete "${cmd_args[@]}";;
         insert) cmd_insert "${cmd_args[@]}";;
         squash) cmd_squash "${cmd_args[@]}";;
         submit) cmd_submit "${cmd_args[@]}";;
         sync) cmd_sync "${cmd_args[@]}";;
         status) cmd_status "${cmd_args[@]}";;
         track) cmd_track "${cmd_args[@]}";;
-        next) cmd_next "${cmd_args[@]}";;
-        prev) cmd_prev "${cmd_args[@]}";;
+        next) cmd_up "${cmd_args[@]}";;
+        prev) cmd_down "${cmd_args[@]}";;
         restack) cmd_restack "${cmd_args[@]}";;
-        continue) cmd_continue "${cmd_gargs[@]}";;
+        continue) cmd_continue "${cmd_args[@]}";;
         push) cmd_push "${cmd_args[@]}";;
         pr) cmd_pr "${cmd_args[@]}";;
         list|ls) cmd_list "${cmd_args[@]}";;
