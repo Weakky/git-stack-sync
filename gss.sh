@@ -245,6 +245,7 @@ unset_parent_branch() {
     
     # Remove from in-memory maps
     if [[ -n "$parent_branch" ]]; then
+        # Remove from parent map (this is okay as child keys are unique)
         local child_index
         child_index=$(_get_map_index "$child_branch" "${GSS_PARENTS_KEYS[@]}")
         if [[ "$child_index" -ne "-1" ]]; then
@@ -252,11 +253,19 @@ unset_parent_branch() {
             unset 'GSS_PARENTS_VALUES[$child_index]'
         fi
 
-        local parent_index
-        parent_index=$(_get_map_index "$parent_branch" "${GSS_CHILDREN_KEYS[@]}")
-        if [[ "$parent_index" -ne "-1" ]]; then
-            unset 'GSS_CHILDREN_KEYS[$parent_index]'
-            unset 'GSS_CHILDREN_VALUES[$parent_index]'
+        # Remove from child map (needs to be specific)
+        # Find the specific entry where key is parent AND value is child, then unset it.
+        local parent_index_to_remove=-1
+        for i in "${!GSS_CHILDREN_KEYS[@]}"; do
+            if [[ "${GSS_CHILDREN_KEYS[$i]}" == "$parent_branch" && "${GSS_CHILDREN_VALUES[$i]}" == "$child_branch" ]]; then
+                parent_index_to_remove=$i
+                break
+            fi
+        done
+
+        if [[ "$parent_index_to_remove" -ne "-1" ]]; then
+            unset 'GSS_CHILDREN_KEYS[$parent_index_to_remove]'
+            unset 'GSS_CHILDREN_VALUES[$parent_index_to_remove]'
         fi
     fi
 }
