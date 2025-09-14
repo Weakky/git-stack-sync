@@ -1076,6 +1076,32 @@ cmd_continue() {
     if [[ ${#remaining_branches_array[@]} -gt 0 ]]; then
         log_step "Resuming '$COMMAND' operation..."
         
+        local conflicted_branch="${remaining_branches_array[0]}"
+
+        # --- Abort Detection ---
+        # If the conflicted branch's history does NOT contain the last successful base,
+        # it means the user must have aborted the rebase.
+        if ! git merge-base --is-ancestor "$LAST_SUCCESSFUL_BASE" "$conflicted_branch"; then
+            log_warning "Rebase for '$conflicted_branch' was not completed."
+            log_info "It appears 'git rebase --abort' may have been run."
+            
+            if [[ "$AUTO_CONFIRM" != true ]]; then
+                log_prompt "Do you want to cancel the entire '$COMMAND' operation?"
+                read -p "(y/N) " -n 1 -r
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    log_error "Cannot continue. The stack is in an inconsistent state."
+                    log_suggestion "Please fix the history of '$conflicted_branch'."
+                    exit 1
+                fi
+            fi
+
+            log_info "Cancelling operation and cleaning up state."
+            rm -f "$STATE_FILE"
+            exit 0
+        fi
+
+        # --- Normal Continuation ---
         # The first branch in the list is the one that was just manually fixed.
         local just_completed_branch="${remaining_branches_array[0]}"
 
@@ -1559,3 +1585,4 @@ main() {
 }
 
 main "$@"
+
