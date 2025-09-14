@@ -9,13 +9,6 @@ STATE_FILE=".git/GSS_OPERATION_STATE"
 CONFIG_CACHE_FILE=".git/GSS_CONFIG_CACHE"
 AUTO_CONFIRM=false # Global flag for --yes
 
-# Internal cache for branch relationships
-declare -a GSS_PARENTS_KEYS
-declare -a GSS_PARENTS_VALUES
-declare -a GSS_CHILDREN_KEYS
-declare -a GSS_CHILDREN_VALUES
-
-
 # --- Color Constants ---
 C_RED='\033[0;31m'
 C_YELLOW='\033[0;33m'
@@ -109,53 +102,6 @@ _initialize_config() {
 
 
 # --- Internal Functions ---
-
-# Internal helper to find the index of a key in one of our simulated maps.
-_get_map_index() {
-    local key="$1"
-    shift
-    local -a keys_array=("$@")
-    for i in "${!keys_array[@]}"; do
-        if [[ "${keys_array[$i]}" == "$key" ]]; then
-            echo "$i"
-            return
-        fi
-    done
-    echo "-1"
-}
-
-
-# Build branch maps using standard arrays for compatibility.
-_build_branch_maps() {
-    # Clear arrays to ensure fresh data
-    GSS_PARENTS_KEYS=()
-    GSS_PARENTS_VALUES=()
-    GSS_CHILDREN_KEYS=()
-    GSS_CHILDREN_VALUES=()
-    
-    # Read all parent config entries in one go
-    while read -r config_line; do
-        # Line is in format: "branch.<child>.parent <parent>"
-        local child_branch
-        child_branch=$(echo "$config_line" | sed -e 's/^branch\.\(.*\)\.parent .*/\1/')
-        local parent_branch
-        parent_branch=$(echo "$config_line" | sed -e 's/^branch\..*\.parent \(.*\)/\1/')
-        
-        GSS_PARENTS_KEYS+=("$child_branch")
-        GSS_PARENTS_VALUES+=("$parent_branch")
-        GSS_CHILDREN_KEYS+=("$parent_branch")
-        GSS_CHILDREN_VALUES+=("$child_branch")
-    done < <(git config --get-regexp '^branch\..*\.parent$' || true)
-}
-
-# Ensures the branch relationship maps are loaded into memory.
-_ensure_branch_maps_loaded() {
-    # Check if the keys array is empty.
-    if [ ${#GSS_PARENTS_KEYS[@]} -eq 0 ]; then
-       _build_branch_maps
-    fi
-}
-
 _guard_dirty_state() {
     if [[ -n "$(git status --porcelain)" ]]; then
         log_error "Command cannot run with uncommitted changes in the working directory."
@@ -180,117 +126,33 @@ get_current_branch() {
     git rev-parse --abbrev-ref HEAD
 }
 
-# Get parent branch from git config cache.
+# Get parent branch directly from git config.
 get_parent_branch() {
     local branch_name=$1
-    _ensure_branch_maps_loaded
-    local index
-    index=$(_get_map_index "$branch_name" "${GSS_PARENTS_KEYS[@]}")
-    if [[ "$index" -ne "-1" ]]; then
-        echo "${GSS_PARENTS_VALUES[$index]}"
-    else
-        echo ""
-    fi
+    git config --get "branch.${branch_name}.parent" || echo ""
 }
 
-# Get child branch from git config cache.
+# Get child branch by searching through git config.
 get_child_branch() {
     local parent_branch=$1
-    _ensure_branch_maps_loaded
-    local index
-    index=$(_get_map_index "$parent_branch" "${GSS_CHILDREN_KEYS[@]}")
-    if [[ "$index" -ne "-1" ]]; then
-        echo "${GSS_CHILDREN_VALUES[$index]}"
-    else
-        echo ""
-    fi
+    # Read all parent configs and find the one where the value matches our parent_branch.
+    # This is less performant than a cache but is always correct.
+    local child_branch
+    child_branch=$(git config --get-regexp '^branch\..*\.parent$' | grep " ${parent_branch}$" | sed -e 's/^branch\.\(.*\)\.parent .*/\1/' | head -n 1)
+    echo "$child_branch"
 }
 
 # Helper function to set the parent of a given branch.
 set_parent_branch() {
     local child_branch=$1
     local parent_branch=$2
-    _ensure_branch_maps_loaded
-
-    local old_parent
-    old_parent=$(get_parent_branch "$child_branch")
-
-    # --- Rebuild Cache Arrays (to avoid sparse arrays from `unset`) ---
-    local new_parents_keys=()
-    local new_parents_values=()
-    for i in "${!GSS_PARENTS_KEYS[@]}"; do
-        if [[ "${GSS_PARENTS_KEYS[$i]}" != "$child_branch" ]]; then
-            new_parents_keys+=("${GSS_PARENTS_KEYS[$i]}")
-            new_parents_values+=("${GSS_PARENTS_VALUES[$i]}")
-        fi
-    done
-    
-    local new_children_keys=()
-    local new_children_values=()
-    if [[ -n "$old_parent" ]]; then
-        for i in "${!GSS_CHILDREN_KEYS[@]}"; do
-            if [[ "${GSS_CHILDREN_KEYS[$i]}" != "$old_parent" || "${GSS_CHILDREN_VALUES[$i]}" != "$child_branch" ]]; then
-                new_children_keys+=("${GSS_CHILDREN_KEYS[$i]}")
-                new_children_values+=("${GSS_CHILDREN_VALUES[$i]}")
-            fi
-        done
-    else
-        new_children_keys=("${GSS_CHILDREN_KEYS[@]}")
-        new_children_values=("${GSS_CHILDREN_VALUES[@]}")
-    fi
-
-    # Add the new relationship
-    new_parents_keys+=("$child_branch")
-    new_parents_values+=("$parent_branch")
-    new_children_keys+=("$parent_branch")
-    new_children_values+=("$child_branch")
-
-    # Overwrite the global arrays with the new, clean ones
-    GSS_PARENTS_KEYS=("${new_parents_keys[@]}")
-    GSS_PARENTS_VALUES=("${new_parents_values[@]}")
-    GSS_CHILDREN_KEYS=("${new_children_keys[@]}")
-    GSS_CHILDREN_VALUES=("${new_children_values[@]}")
-
-    # Update the persistent git config
     git config "branch.${child_branch}.parent" "$parent_branch"
 }
 
 # Helper function to unset the parent of a given branch.
 unset_parent_branch() {
     local child_branch=$1
-    _ensure_branch_maps_loaded
-
-    local parent_branch
-    parent_branch=$(get_parent_branch "$child_branch")
-    
-    # Update git config first
     git config --unset "branch.${child_branch}.parent" || true
-    
-    # --- Rebuild Cache Arrays ---
-    if [[ -n "$parent_branch" ]]; then
-        local new_parents_keys=()
-        local new_parents_values=()
-        for i in "${!GSS_PARENTS_KEYS[@]}"; do
-            if [[ "${GSS_PARENTS_KEYS[$i]}" != "$child_branch" ]]; then
-                new_parents_keys+=("${GSS_PARENTS_KEYS[$i]}")
-                new_parents_values+=("${GSS_PARENTS_VALUES[$i]}")
-            fi
-        done
-
-        local new_children_keys=()
-        local new_children_values=()
-        for i in "${!GSS_CHILDREN_KEYS[@]}"; do
-             if [[ "${GSS_CHILDREN_KEYS[$i]}" != "$parent_branch" || "${GSS_CHILDREN_VALUES[$i]}" != "$child_branch" ]]; then
-                new_children_keys+=("${GSS_CHILDREN_KEYS[$i]}")
-                new_children_values+=("${GSS_CHILDREN_VALUES[$i]}")
-            fi
-        done
-
-        GSS_PARENTS_KEYS=("${new_parents_keys[@]}")
-        GSS_PARENTS_VALUES=("${new_parents_values[@]}")
-        GSS_CHILDREN_KEYS=("${new_children_keys[@]}")
-        GSS_CHILDREN_VALUES=("${new_children_values[@]}")
-    fi
 }
 
 
@@ -329,18 +191,12 @@ get_stack_bottom() {
     echo "$current_branch"
 }
 
-# Helper to find all stack bottom branches using the cache.
+# Helper to find all stack bottom branches.
 get_all_stack_bottoms() {
-    local bottoms=()
-    # Iterate over all children in the parent map
-    for i in "${!GSS_PARENTS_KEYS[@]}"; do
-        local child="${GSS_PARENTS_KEYS[$i]}"
-        local parent="${GSS_PARENTS_VALUES[$i]}"
-        if [[ "$parent" == "$BASE_BRANCH" ]]; then
-            bottoms+=("$child")
-        fi
-    done
-    echo "${bottoms[@]}"
+    # Find all branches whose parent is explicitly set to the base branch.
+    local bottoms
+    bottoms=$(git config --get-regexp '^branch\..*\.parent$' | grep " ${BASE_BRANCH}$" | sed -e 's/^branch\.\(.*\)\.parent .*/\1/')
+    echo "$bottoms"
 }
 
 # Helper to find the "top" of the current stack by traversing child relationships.
@@ -427,9 +283,9 @@ _perform_iterative_rebase() {
 
         # --- On successful rebase, update the state file ---
         local parent_to_set="$current_base"
-        if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
-            parent_to_set="$BASE_BRANCH"
-        fi
+        # if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
+        #     parent_to_set="$BASE_BRANCH"
+        # fi
         set_parent_branch "$branch" "$parent_to_set"
         
         current_base="$branch"
@@ -1129,9 +985,9 @@ cmd_continue() {
         log_info "Updating metadata for resolved branch '$just_completed_branch'..."
         
         local parent_to_set="$LAST_SUCCESSFUL_BASE"
-        if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
-            parent_to_set="$BASE_BRANCH"
-        fi
+        # if [[ "$COMMAND" == "sync" && "$parent_to_set" == "origin/$BASE_BRANCH" ]]; then
+        #     parent_to_set="$BASE_BRANCH"
+        # fi
         set_parent_branch "$just_completed_branch" "$parent_to_set"
 
         # The new base for the rest of the stack is the branch we just fixed.
@@ -1307,8 +1163,6 @@ cmd_list() {
     log_step "Finding all available stacks..."
     
     # Build the in-memory maps for fast lookups.
-    _ensure_branch_maps_loaded
-
     local bottoms
     bottoms=($(get_all_stack_bottoms))
     
@@ -1610,4 +1464,3 @@ main() {
 }
 
 main "$@"
-
