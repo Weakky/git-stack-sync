@@ -127,9 +127,9 @@ Here is a detailed list of all available commands.
 
     Finds and lists all stacks in your local repository.
 
-  * #### `gss next` / `gss prev`
+  * #### `gss up` / `gss down`
 
-    Quickly navigate up (`next`) or down (`prev`) the branch stack.
+    Quickly navigate up (`up`) or down (`down`) the branch stack.
 
 ### GitHub Integration
 

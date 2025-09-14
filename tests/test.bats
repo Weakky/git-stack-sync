@@ -99,7 +99,7 @@ teardown() {
     # Action
     run "$GSS_CMD" status
     assert_failure
-    assert_output --partial "Found 1 stack(s):"
+    assert_output --partial "Found stack(s):"
     assert_output --partial "- feature-a (2 branches)"
 }
 

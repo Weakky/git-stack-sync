@@ -9,6 +9,13 @@ STATE_FILE=".git/GSS_OPERATION_STATE"
 CONFIG_CACHE_FILE=".git/GSS_CONFIG_CACHE"
 AUTO_CONFIRM=false # Global flag for --yes
 
+# Internal cache for branch relationships
+declare -a GSS_PARENTS_KEYS
+declare -a GSS_PARENTS_VALUES
+declare -a GSS_CHILDREN_KEYS
+declare -a GSS_CHILDREN_VALUES
+
+
 # --- Color Constants ---
 C_RED='\033[0;31m'
 C_YELLOW='\033[0;33m'
@@ -103,6 +110,53 @@ _initialize_config() {
 
 # --- Internal Functions ---
 
+# Internal helper to find the index of a key in one of our simulated maps.
+_get_map_index() {
+    local key="$1"
+    shift
+    local -a keys_array=("$@")
+    for i in "${!keys_array[@]}"; do
+        if [[ "${keys_array[$i]}" == "$key" ]]; then
+            echo "$i"
+            return
+        fi
+    done
+    echo "-1"
+}
+
+
+# Build branch maps using standard arrays for compatibility.
+_build_branch_maps() {
+    # Clear arrays to ensure fresh data
+    GSS_PARENTS_KEYS=()
+    GSS_PARENTS_VALUES=()
+    GSS_CHILDREN_KEYS=()
+    GSS_CHILDREN_VALUES=()
+    
+    # Read all parent config entries in one go
+    while read -r config_line; do
+        # Line is in format: "branch.<child>.parent <parent>"
+        local child_branch
+        child_branch=$(echo "$config_line" | sed -e 's/^branch\.\(.*\)\.parent .*/\1/')
+        local parent_branch
+        parent_branch=$(echo "$config_line" | sed -e 's/^branch\..*\.parent \(.*\)/\1/')
+        
+        GSS_PARENTS_KEYS+=("$child_branch")
+        GSS_PARENTS_VALUES+=("$parent_branch")
+        GSS_CHILDREN_KEYS+=("$parent_branch")
+        GSS_CHILDREN_VALUES+=("$child_branch")
+    done < <(git config --get-regexp '^branch\..*\.parent$' || true)
+}
+
+# Ensures the branch relationship maps are loaded into memory.
+_ensure_branch_maps_loaded() {
+    # Check if the keys array is empty.
+    if [ ${#GSS_PARENTS_KEYS[@]} -eq 0 ]; then
+       _build_branch_maps
+    fi
+}
+
+
 # Helper function to check for GitHub CLI authentication.
 check_gh_auth() {
     if ! gh auth status &>/dev/null; then
@@ -118,42 +172,93 @@ get_current_branch() {
     git rev-parse --abbrev-ref HEAD
 }
 
-# Helper function to get the parent of a given branch in the stack.
-# It now ONLY reads from the git config.
+# Get parent branch from git config cache.
 get_parent_branch() {
     local branch_name=$1
-    git config --get "branch.${branch_name}.parent" || echo ""
+    _ensure_branch_maps_loaded
+    local index
+    index=$(_get_map_index "$branch_name" "${GSS_PARENTS_KEYS[@]}")
+    if [[ "$index" -ne "-1" ]]; then
+        echo "${GSS_PARENTS_VALUES[$index]}"
+    else
+        echo ""
+    fi
 }
 
-# Helper function to get the child of a given branch in the stack.
+# Get child branch from git config cache.
 get_child_branch() {
     local parent_branch=$1
-    for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
-        # Skip the parent branch itself to avoid self-parenting issues in weird repo states
-        if [[ "$branch" == "$parent_branch" ]]; then
-            continue
-        fi
-        local parent
-        parent=$(get_parent_branch "$branch")
-        if [[ "$parent" == "$parent_branch" ]]; then
-            echo "$branch"
-            return
-        fi
-    done
-    echo "" # No child found
+    _ensure_branch_maps_loaded
+    local index
+    index=$(_get_map_index "$parent_branch" "${GSS_CHILDREN_KEYS[@]}")
+    if [[ "$index" -ne "-1" ]]; then
+        echo "${GSS_CHILDREN_VALUES[$index]}"
+    else
+        echo ""
+    fi
 }
 
 # Helper function to set the parent of a given branch.
 set_parent_branch() {
     local child_branch=$1
     local parent_branch=$2
+    _ensure_branch_maps_loaded
+
+    # Check if the child already has a parent and remove the old entry
+    local child_index
+    child_index=$(_get_map_index "$child_branch" "${GSS_PARENTS_KEYS[@]}")
+    if [[ "$child_index" -ne "-1" ]]; then
+        local old_parent="${GSS_PARENTS_VALUES[$child_index]}"
+        # Remove old parent's child mapping
+        local old_parent_child_index
+        old_parent_child_index=$(_get_map_index "$old_parent" "${GSS_CHILDREN_KEYS[@]}")
+        if [[ "$old_parent_child_index" -ne "-1" ]]; then
+            unset 'GSS_CHILDREN_KEYS[$old_parent_child_index]'
+            unset 'GSS_CHILDREN_VALUES[$old_parent_child_index]'
+        fi
+        # Remove old child-to-parent mapping
+        unset 'GSS_PARENTS_KEYS[$child_index]'
+        unset 'GSS_PARENTS_VALUES[$child_index]'
+    fi
+    
+    # Update git config
     git config "branch.${child_branch}.parent" "$parent_branch"
+    
+    # Add new entries to in-memory maps
+    GSS_PARENTS_KEYS+=("$child_branch")
+    GSS_PARENTS_VALUES+=("$parent_branch")
+    GSS_CHILDREN_KEYS+=("$parent_branch")
+    GSS_CHILDREN_VALUES+=("$child_branch")
 }
 
 # Helper function to unset the parent of a given branch.
+# Updates the git config and cache accordingly.
 unset_parent_branch() {
     local child_branch=$1
+    _ensure_branch_maps_loaded
+
+    local parent_branch
+    parent_branch=$(get_parent_branch "$child_branch")
+    
+    # Update git config
     git config --unset "branch.${child_branch}.parent" || true
+    
+    # Remove from in-memory maps
+    if [[ -n "$parent_branch" ]]; then
+        local child_index
+        child_index=$(_get_map_index "$child_branch" "${GSS_PARENTS_KEYS[@]}")
+        if [[ "$child_index" -ne "-1" ]]; then
+            unset 'GSS_PARENTS_KEYS[$child_index]'
+            unset 'GSS_PARENTS_VALUES[$child_index]'
+        fi
+
+        local parent_index
+        parent_index=$(_get_map_index "$parent_branch" "${GSS_CHILDREN_KEYS[@]}")
+        if [[ "$parent_index" -ne "-1" ]]; then
+            unset 'GSS_CHILDREN_KEYS[$parent_index]'
+            unset 'GSS_CHILDREN_VALUES[$parent_index]'
+        fi
+    fi
 }
 
 
@@ -192,20 +297,15 @@ get_stack_bottom() {
     echo "$current_branch"
 }
 
-# Helper to find all stack bottom branches.
+# Helper to find all stack bottom branches using the cache.
 get_all_stack_bottoms() {
     local bottoms=()
-    for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
-        # Exclude the base branch itself
-        if [[ "$branch" == "$BASE_BRANCH" ]]; then
-            continue
-        fi
-
-        local parent
-        parent=$(get_parent_branch "$branch")
-        # A branch is the bottom of a STACK if its parent is the base branch.
+    # Iterate over all children in the parent map
+    for i in "${!GSS_PARENTS_KEYS[@]}"; do
+        local child="${GSS_PARENTS_KEYS[$i]}"
+        local parent="${GSS_PARENTS_VALUES[$i]}"
         if [[ "$parent" == "$BASE_BRANCH" ]]; then
-            bottoms+=("$branch")
+            bottoms+=("$child")
         fi
     done
     echo "${bottoms[@]}"
@@ -405,7 +505,7 @@ _guard_context() {
     fi
 
     local parent
-    parent=$(git config --get "branch.${current_branch}.parent" || echo "")
+    parent=$(get_parent_branch "$current_branch")
     if [[ -z "$parent" ]]; then
         log_error "The '$command_name' command requires a tracked branch."
         log_info "Branch '$current_branch' is not currently tracked by gss."
@@ -661,6 +761,9 @@ cmd_squash() {
     fi
 
     git branch -D "$branch_to_squash"
+    # Unset parent after deleting branch to keep cache clean
+    unset_parent_branch "$branch_to_squash"
+    
     if [[ -n "$grand_child" ]]; then
         set_parent_branch "$grand_child" "$target_branch"
     fi
@@ -1073,6 +1176,9 @@ cmd_pr() {
 cmd_list() {
     log_step "Finding all available stacks..."
     
+    # Build the in-memory maps for fast lookups.
+    _ensure_branch_maps_loaded
+
     local bottoms
     bottoms=($(get_all_stack_bottoms))
     
@@ -1082,7 +1188,7 @@ cmd_list() {
         return
     fi
 
-    log_success "Found ${#bottoms[@]} stack(s):"
+    local found_stacks=0
     for bottom in "${bottoms[@]}"; do
         local count=1
         local current_branch="$bottom"
@@ -1094,9 +1200,24 @@ cmd_list() {
                 break
             fi
         done
-        log_info "- $bottom ($count branches)"
+
+        # Only display stacks with more than one branch ---
+        if [[ "$count" -gt 1 ]]; then
+            if [[ "$found_stacks" -eq 0 ]]; then
+                # Print the header only when the first valid stack is found
+                log_success "Found stack(s):"
+            fi
+            ((found_stacks++))
+            log_info "- $bottom ($count branches)"
+        fi
     done
-    log_suggestion "Run 'git checkout <branch>' to switch to a stack and see its status."
+
+    if [[ "$found_stacks" -eq 0 ]]; then
+        log_warning "No gss stacks found."
+        log_suggestion "Run 'gss create <branch-name>' from '$BASE_BRANCH' or an existing branch to start a new stack."
+    else
+        log_suggestion "Run 'git checkout <branch>' to switch to a stack and see its status."
+    fi
 }
 
 
@@ -1324,7 +1445,11 @@ main() {
         exit 0
     fi
 
-    _initialize_config
+    # Initialize config, but not for the clean command itself
+    if [[ "$command" != "clean" ]]; then
+        _initialize_config
+    fi
+
 
     # --- Command Dispatch ---
     # Pass the command-specific arguments to the command function.
