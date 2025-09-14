@@ -75,3 +75,85 @@ teardown() {
     run cat file.txt
     assert_output "$(echo -e "line 1\nline 2\nline 3")"
 }
+
+@test "sync: handles multiple conflicts across a stack correctly" {
+    # This test ensures the state file is updated correctly during an
+    # iterative rebase, allowing the user to resolve multiple conflicts
+    # one by one and have the metadata be correct at the end.
+
+    # Setup
+    # 1. Create a stack br1 -> br2 -> br3, where each branch modifies
+    #    the same line in a different file.
+    run "$GSS_CMD" create br1
+    create_commit "br1 commit" "version=1" "file1.txt"
+    create_commit "br1 commit 2" "version=1" "file2.txt"
+
+    run "$GSS_CMD" create br2
+    create_commit "br2 commit" "version=2" "file1.txt"
+
+    run "$GSS_CMD" create br3
+    create_commit "br3 commit" "version=3" "file2.txt"
+
+    # 2. Mock br1 as merged and create a conflicting squash on main.
+    git config branch.br1.pr-number 10
+    mock_pr_state 10 MERGED
+    run git checkout main
+    run git merge --squash br1
+    run git commit -m "Squash merge of br1"
+
+    # 3. Create a commit on main that will conflict with both br2 and br3.
+    create_commit "main conflict" "version=main" "file1.txt"
+    create_commit "main conflict 2" "version=main" "file2.txt"
+    run git push origin main
+
+    # 4. Return to the top of the stack
+    run git checkout br3
+
+    # Action 1: Run sync, which should fail on br2
+    run "$GSS_CMD" sync --yes
+    assert_failure
+    assert_output --partial "Rebase conflict detected while rebasing 'br2'"
+
+    # --- State Assertions After First Failure ---
+    # The state file should list br3 as the remaining branch.
+    run cat ".git/GSS_OPERATION_STATE"
+    assert_output --partial "REMAINING_BRANCHES_TO_REBASE='br2 br3'"
+
+    # Resolution 1: Fix conflict for br2.
+    # The user must follow the instructions from the tool.
+    echo "version=2-resolved" > file1.txt
+    run git add file1.txt
+    GIT_EDITOR=true run git rebase --continue
+    
+    # Action 2: Run gss continue. The tool should pick up where it left off
+    # and now fail on the rebase of br3.
+    run "$GSS_CMD" continue --yes
+    assert_failure
+    assert_output --partial "Rebase conflict detected while rebasing 'br3'"
+
+    # --- State Assertions After Second Failure ---
+    # The state file should now be empty for REMAINING_BRANCHES_TO_REBASE, as br3 was the last one.
+    run cat ".git/GSS_OPERATION_STATE"
+    refute_output --partial "REMAINING_BRANCHES_TO_REBASE="
+
+    # Resolution 2: Fix conflict for br3.
+    echo "version=3-resolved" > file2.txt
+    run git add file2.txt
+    GIT_EDITOR=true run git rebase --continue
+
+    # Action 3: Now that all git operations are done, run gss continue to finalize.
+    run "$GSS_CMD" continue --yes
+    assert_success
+
+    # --- Final State Assertions ---
+    # The state file should be gone.
+    refute [ -f ".git/GSS_OPERATION_STATE" ]
+    # The stack should be correctly reparented.
+    assert_branch_parent br2 main
+    assert_branch_parent br3 br2
+    # The content of the files should be correct.
+    run cat file1.txt
+    assert_output "version=2-resolved"
+    run cat file2.txt
+    assert_output "version=3-resolved"
+}

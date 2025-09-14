@@ -373,23 +373,22 @@ _perform_iterative_rebase() {
     local merged_branches_to_delete=$3
     
     # Rebase parameters
-    local new_base=$4
+    local initial_base=$4
     shift 4
     local branches_to_rebase=("$@")
 
-    # Save the state BEFORE starting the potentially failing operation.
+    # Save the initial state BEFORE starting the potentially failing operation.
     echo "COMMAND='$command'" > "$STATE_FILE"
     echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
-    if [[ -n "$merged_branches_to_delete" ]]; then
-        echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
-    fi
-    # For sync, we need the list of unmerged branches to repair metadata later.
-    if [[ "$command" == "sync" ]]; then
-        echo "UNMERGED_BRANCHES='${branches_to_rebase[*]}'" >> "$STATE_FILE"
-    fi
+    echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
+    echo "REMAINING_BRANCHES_TO_REBASE='${branches_to_rebase[*]}'" >> "$STATE_FILE"
+    echo "LAST_SUCCESSFUL_BASE='$initial_base'" >> "$STATE_FILE"
+
+    local current_base="$initial_base"
+    local remaining_branches=("${branches_to_rebase[@]}")
 
     for branch in "${branches_to_rebase[@]}"; do
-        log_step "Rebasing '$branch' onto '$new_base'..."
+        log_step "Rebasing '$branch' onto '$current_base'..."
         git checkout "$branch" >/dev/null 2>&1
         local old_base
         old_base=$(get_parent_branch "$branch")
@@ -398,7 +397,7 @@ _perform_iterative_rebase() {
             exit 1
         fi
 
-        if ! git rebase --onto "$new_base" "$old_base" "$branch"; then
+        if ! git rebase --onto "$current_base" "$old_base" "$branch"; then
             echo ""
             log_error "Rebase conflict detected while rebasing '$branch'."
             log_info "Please follow these steps to resolve:"
@@ -409,20 +408,27 @@ _perform_iterative_rebase() {
             exit 1
         fi
         
+        # --- On successful rebase, update the state file ---
+        set_parent_branch "$branch" "$current_base"
+        current_base="$branch"
+        remaining_branches=("${remaining_branches[@]:1}") # Pop the first element
+        
+        echo "LAST_SUCCESSFUL_BASE='$current_base'" >> "$STATE_FILE"
+        echo "REMAINING_BRANCHES_TO_REBASE='${remaining_branches[*]}'" >> "$STATE_FILE"
+
+
         # Check if the rebase resulted in an empty branch and warn the user.
         local commit_count
-        commit_count=$(git rev-list --count "${new_base}".."${branch}")
+        commit_count=$(git rev-list --count "${current_base}".."${branch}")
         if [[ "$commit_count" -eq 0 ]]; then
             local pr_number_to_check
             pr_number_to_check=$(get_pr_number "$branch")
-            log_warning "After rebasing, branch '$branch' has no new changes compared to '$new_base'."
+            log_warning "After rebasing, branch '$branch' has no new changes compared to '$current_base'."
             if [[ -n "$pr_number_to_check" ]]; then
                 log_info "This can happen if changes from this branch were also introduced into its parent."
                 log_info "Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
             fi
         fi
-
-        new_base="$branch"
     done
 }
 
@@ -507,27 +513,6 @@ _finish_operation() {
         done
     fi
 
-     # After a sync, the parent metadata is stale and needs to be repaired.
-    if [[ "${COMMAND}" == "sync" && -n "${UNMERGED_BRANCHES}" ]]; then
-        log_step "Updating stack metadata..."
-        # We need the original list of merged branches to determine the new parent.
-        local merged_branch_list
-        merged_branch_list="${MERGED_BRANCHES_TO_DELETE}"
-        local last_unmerged_ancestor="$BASE_BRANCH"
-        for branch in ${UNMERGED_BRANCHES}; do
-            local original_parent
-            original_parent=$(get_parent_branch "$branch")
-
-            # A branch needs a new parent if its old parent was one of the merged branches.
-            # We also update the parent of the very first branch in the stack.
-            if [[ " ${merged_branch_list} " =~ " ${original_parent} " ]] || [[ "$last_unmerged_ancestor" == "$BASE_BRANCH" ]]; then
-                set_parent_branch "$branch" "$last_unmerged_ancestor"
-                log_info "Set parent of '$branch' to '$last_unmerged_ancestor'."
-            fi
-            last_unmerged_ancestor="$branch"
-        done
-    fi
-
     if git rev-parse --verify "$ORIGINAL_BRANCH" >/dev/null 2>&1; then
         if [[ "$(get_current_branch)" != "$ORIGINAL_BRANCH" ]]; then
             log_info "Returning to original branch '$ORIGINAL_BRANCH'."
@@ -540,7 +525,9 @@ _finish_operation() {
 
     rm -f "$STATE_FILE"
     log_success "Operation complete."
-    log_suggestion "Run 'gss push' to update your remote branches."
+    if [[ "$COMMAND" == "sync" || "$COMMAND" == "restack" ]]; then
+        log_suggestion "Run 'gss push' to update your remote branches."
+    fi
 }
 
 # (New) A centralized guard for commands that require a tracked branch.
@@ -1080,6 +1067,15 @@ cmd_continue() {
         return
     fi
 
+    # shellcheck source=/dev/null
+    source "$STATE_FILE"
+
+    local remaining_branches_array=($REMAINING_BRANCHES_TO_REBASE)
+    if [[ ${#remaining_branches_array[@]} -gt 0 ]]; then
+        log_step "Resuming '$COMMAND' operation..."
+        _perform_iterative_rebase "$COMMAND" "$ORIGINAL_BRANCH" "$MERGED_BRANCHES_TO_DELETE" "$LAST_SUCCESSFUL_BASE" "${remaining_branches_array[@]}"
+    fi
+
     _finish_operation
 }
 
@@ -1166,10 +1162,13 @@ cmd_sync() {
 
     else
         log_warning "All branches in the stack were merged. Nothing left to rebase."
+        # Still need to create the state file so finish_operation can clean up.
         if [[ ${#merged_branches[@]} -gt 0 ]]; then
             echo "COMMAND='sync'" > "$STATE_FILE"
             echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
             echo "MERGED_BRANCHES_TO_DELETE='${merged_branches[*]}'" >> "$STATE_FILE"
+            echo "REMAINING_BRANCHES_TO_REBASE=''" >> "$STATE_FILE"
+            echo "LAST_SUCCESSFUL_BASE='$BASE_BRANCH'" >> "$STATE_FILE"
         fi
         _finish_operation
     fi
@@ -1540,4 +1539,3 @@ main() {
 }
 
 main "$@"
-
