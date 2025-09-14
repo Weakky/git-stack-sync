@@ -1260,8 +1260,12 @@ teardown() {
 }
 
 @test "list: only lists the tracked part of a broken stack" {
-    # Setup a stack and then untrack the middle branch
-    create_stack feature-a feature-b feature-c
+    # Setup: Manually create a stack of branches without commits
+    run "$GSS_CMD" create feature-a
+    run "$GSS_CMD" create feature-b
+    run "$GSS_CMD" create feature-c
+
+    # Untrack the middle branch. This should succeed as there are no unique commits.
     run git checkout feature-b
     run "$GSS_CMD" track remove
 
@@ -1270,7 +1274,39 @@ teardown() {
 
     # Assertions
     assert_success
+    # After 'b' is removed, the stack is repaired to 'a -> c', which is a 2-branch stack
     assert_output --partial "feature-a (2 branches)"
+}
+
+@test "track remove: correctly updates cache with forked branches (REGRESSION)" {
+    # This tests a specific cache invalidation bug.
+    # If a parent has multiple children (a forked stack), untracking one child
+    # should not cause the other child's relationship to be removed from the cache.
+
+    # Setup: Create a fork: parent -> child-a AND parent -> child-b
+    run "$GSS_CMD" create parent-branch
+    run "$GSS_CMD" create child-a
+    run git checkout parent-branch
+    run "$GSS_CMD" create child-b
+    run git checkout child-a # Start from the branch we will untrack
+
+    # Action: Untrack child-a. Since there are no commits, this will succeed.
+    # The fix in `unset_parent_branch` ensures this only removes the 'parent -> child-a'
+    # link from the cache, leaving 'parent -> child-b' intact.
+    run "$GSS_CMD" track remove
+
+    # Assertions
+    assert_success
+    assert_output --partial "Stopped tracking 'child-a'"
+
+    # --- State Assertions ---
+    # The key assertion: the other half of the fork must still exist.
+    # Running another gss command that relies on the cache (`list`) will prove this.
+    # The remaining stack is main -> parent-branch -> child-b, which is a 2-branch stack.
+    run "$GSS_CMD" list
+    assert_success
+    assert_output --partial "parent-branch (2 branches)"
+    refute_output --partial "child-a"
 }
 
 @test "list: lists a stack based on an alternative branch" {
