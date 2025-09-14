@@ -9,13 +9,6 @@ STATE_FILE=".git/GSS_OPERATION_STATE"
 CONFIG_CACHE_FILE=".git/GSS_CONFIG_CACHE"
 AUTO_CONFIRM=false # Global flag for --yes
 
-# Internal cache for branch relationships
-declare -a GSS_PARENTS_KEYS
-declare -a GSS_PARENTS_VALUES
-declare -a GSS_CHILDREN_KEYS
-declare -a GSS_CHILDREN_VALUES
-
-
 # --- Color Constants ---
 C_RED='\033[0;31m'
 C_YELLOW='\033[0;33m'
@@ -109,53 +102,6 @@ _initialize_config() {
 
 
 # --- Internal Functions ---
-
-# Internal helper to find the index of a key in one of our simulated maps.
-_get_map_index() {
-    local key="$1"
-    shift
-    local -a keys_array=("$@")
-    for i in "${!keys_array[@]}"; do
-        if [[ "${keys_array[$i]}" == "$key" ]]; then
-            echo "$i"
-            return
-        fi
-    done
-    echo "-1"
-}
-
-
-# Build branch maps using standard arrays for compatibility.
-_build_branch_maps() {
-    # Clear arrays to ensure fresh data
-    GSS_PARENTS_KEYS=()
-    GSS_PARENTS_VALUES=()
-    GSS_CHILDREN_KEYS=()
-    GSS_CHILDREN_VALUES=()
-    
-    # Read all parent config entries in one go
-    while read -r config_line; do
-        # Line is in format: "branch.<child>.parent <parent>"
-        local child_branch
-        child_branch=$(echo "$config_line" | sed -e 's/^branch\.\(.*\)\.parent .*/\1/')
-        local parent_branch
-        parent_branch=$(echo "$config_line" | sed -e 's/^branch\..*\.parent \(.*\)/\1/')
-        
-        GSS_PARENTS_KEYS+=("$child_branch")
-        GSS_PARENTS_VALUES+=("$parent_branch")
-        GSS_CHILDREN_KEYS+=("$parent_branch")
-        GSS_CHILDREN_VALUES+=("$child_branch")
-    done < <(git config --get-regexp '^branch\..*\.parent$' || true)
-}
-
-# Ensures the branch relationship maps are loaded into memory.
-_ensure_branch_maps_loaded() {
-    # Check if the keys array is empty.
-    if [ ${#GSS_PARENTS_KEYS[@]} -eq 0 ]; then
-       _build_branch_maps
-    fi
-}
-
 _guard_dirty_state() {
     if [[ -n "$(git status --porcelain)" ]]; then
         log_error "Command cannot run with uncommitted changes in the working directory."
@@ -180,102 +126,33 @@ get_current_branch() {
     git rev-parse --abbrev-ref HEAD
 }
 
-# Get parent branch from git config cache.
+# Get parent branch directly from git config.
 get_parent_branch() {
     local branch_name=$1
-    _ensure_branch_maps_loaded
-    local index
-    index=$(_get_map_index "$branch_name" "${GSS_PARENTS_KEYS[@]}")
-    if [[ "$index" -ne "-1" ]]; then
-        echo "${GSS_PARENTS_VALUES[$index]}"
-    else
-        echo ""
-    fi
+    git config --get "branch.${branch_name}.parent" || echo ""
 }
 
-# Get child branch from git config cache.
+# Get child branch by searching through git config.
 get_child_branch() {
     local parent_branch=$1
-    _ensure_branch_maps_loaded
-    local index
-    index=$(_get_map_index "$parent_branch" "${GSS_CHILDREN_KEYS[@]}")
-    if [[ "$index" -ne "-1" ]]; then
-        echo "${GSS_CHILDREN_VALUES[$index]}"
-    else
-        echo ""
-    fi
+    # Read all parent configs and find the one where the value matches our parent_branch.
+    # This is less performant than a cache but is always correct.
+    local child_branch
+    child_branch=$(git config --get-regexp '^branch\..*\.parent$' | grep " ${parent_branch}$" | sed -e 's/^branch\.\(.*\)\.parent .*/\1/' | head -n 1)
+    echo "$child_branch"
 }
 
 # Helper function to set the parent of a given branch.
 set_parent_branch() {
     local child_branch=$1
     local parent_branch=$2
-    _ensure_branch_maps_loaded
-
-    # Check if the child already has a parent and remove the old entry
-    local child_index
-    child_index=$(_get_map_index "$child_branch" "${GSS_PARENTS_KEYS[@]}")
-    if [[ "$child_index" -ne "-1" ]]; then
-        local old_parent="${GSS_PARENTS_VALUES[$child_index]}"
-        # Remove old parent's child mapping
-        local old_parent_child_index
-        old_parent_child_index=$(_get_map_index "$old_parent" "${GSS_CHILDREN_KEYS[@]}")
-        if [[ "$old_parent_child_index" -ne "-1" ]]; then
-            unset 'GSS_CHILDREN_KEYS[$old_parent_child_index]'
-            unset 'GSS_CHILDREN_VALUES[$old_parent_child_index]'
-        fi
-        # Remove old child-to-parent mapping
-        unset 'GSS_PARENTS_KEYS[$child_index]'
-        unset 'GSS_PARENTS_VALUES[$child_index]'
-    fi
-    
-    # Update git config
     git config "branch.${child_branch}.parent" "$parent_branch"
-    
-    # Add new entries to in-memory maps
-    GSS_PARENTS_KEYS+=("$child_branch")
-    GSS_PARENTS_VALUES+=("$parent_branch")
-    GSS_CHILDREN_KEYS+=("$parent_branch")
-    GSS_CHILDREN_VALUES+=("$child_branch")
 }
 
 # Helper function to unset the parent of a given branch.
-# Updates the git config and cache accordingly.
 unset_parent_branch() {
     local child_branch=$1
-    _ensure_branch_maps_loaded
-
-    local parent_branch
-    parent_branch=$(get_parent_branch "$child_branch")
-    
-    # Update git config
     git config --unset "branch.${child_branch}.parent" || true
-    
-    # Remove from in-memory maps
-    if [[ -n "$parent_branch" ]]; then
-        # Remove from parent map (this is okay as child keys are unique)
-        local child_index
-        child_index=$(_get_map_index "$child_branch" "${GSS_PARENTS_KEYS[@]}")
-        if [[ "$child_index" -ne "-1" ]]; then
-            unset 'GSS_PARENTS_KEYS[$child_index]'
-            unset 'GSS_PARENTS_VALUES[$child_index]'
-        fi
-
-        # Remove from child map (needs to be specific)
-        # Find the specific entry where key is parent AND value is child, then unset it.
-        local parent_index_to_remove=-1
-        for i in "${!GSS_CHILDREN_KEYS[@]}"; do
-            if [[ "${GSS_CHILDREN_KEYS[$i]}" == "$parent_branch" && "${GSS_CHILDREN_VALUES[$i]}" == "$child_branch" ]]; then
-                parent_index_to_remove=$i
-                break
-            fi
-        done
-
-        if [[ "$parent_index_to_remove" -ne "-1" ]]; then
-            unset 'GSS_CHILDREN_KEYS[$parent_index_to_remove]'
-            unset 'GSS_CHILDREN_VALUES[$parent_index_to_remove]'
-        fi
-    fi
 }
 
 
@@ -314,18 +191,12 @@ get_stack_bottom() {
     echo "$current_branch"
 }
 
-# Helper to find all stack bottom branches using the cache.
+# Helper to find all stack bottom branches.
 get_all_stack_bottoms() {
-    local bottoms=()
-    # Iterate over all children in the parent map
-    for i in "${!GSS_PARENTS_KEYS[@]}"; do
-        local child="${GSS_PARENTS_KEYS[$i]}"
-        local parent="${GSS_PARENTS_VALUES[$i]}"
-        if [[ "$parent" == "$BASE_BRANCH" ]]; then
-            bottoms+=("$child")
-        fi
-    done
-    echo "${bottoms[@]}"
+    # Find all branches whose parent is explicitly set to the base branch.
+    local bottoms
+    bottoms=$(git config --get-regexp '^branch\..*\.parent$' | grep " ${BASE_BRANCH}$" | sed -e 's/^branch\.\(.*\)\.parent .*/\1/')
+    echo "$bottoms"
 }
 
 # Helper to find the "top" of the current stack by traversing child relationships.
@@ -373,23 +244,25 @@ _perform_iterative_rebase() {
     local merged_branches_to_delete=$3
     
     # Rebase parameters
-    local new_base=$4
-    shift 4
+    local rebase_target=$4
+    local parent_to_record=$5 # The "clean" name to save in the config
+    shift 5
     local branches_to_rebase=("$@")
 
-    # Save the state BEFORE starting the potentially failing operation.
+    # Save the initial state BEFORE starting the potentially failing operation.
     echo "COMMAND='$command'" > "$STATE_FILE"
     echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
-    if [[ -n "$merged_branches_to_delete" ]]; then
-        echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
-    fi
-    # For sync, we need the list of unmerged branches to repair metadata later.
-    if [[ "$command" == "sync" ]]; then
-        echo "UNMERGED_BRANCHES='${branches_to_rebase[*]}'" >> "$STATE_FILE"
-    fi
+    echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
+    echo "REMAINING_BRANCHES_TO_REBASE='${branches_to_rebase[*]}'" >> "$STATE_FILE"
+    echo "LAST_SUCCESSFUL_REBASE_TARGET='$rebase_target'" >> "$STATE_FILE"
+    echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$parent_to_record'" >> "$STATE_FILE"
+
+    local current_rebase_target="$rebase_target"
+    local current_parent_to_record="$parent_to_record"
+    local remaining_branches=("${branches_to_rebase[@]}")
 
     for branch in "${branches_to_rebase[@]}"; do
-        log_step "Rebasing '$branch' onto '$new_base'..."
+        log_step "Rebasing '$branch' onto '$current_rebase_target'..."
         git checkout "$branch" >/dev/null 2>&1
         local old_base
         old_base=$(get_parent_branch "$branch")
@@ -398,7 +271,7 @@ _perform_iterative_rebase() {
             exit 1
         fi
 
-        if ! git rebase --onto "$new_base" "$old_base" "$branch"; then
+        if ! git rebase --onto "$current_rebase_target" "$old_base" "$branch"; then
             echo ""
             log_error "Rebase conflict detected while rebasing '$branch'."
             log_info "Please follow these steps to resolve:"
@@ -409,20 +282,30 @@ _perform_iterative_rebase() {
             exit 1
         fi
         
+        # --- On successful rebase, update the state file ---
+        set_parent_branch "$branch" "$current_parent_to_record"
+        
+        current_rebase_target="$branch"
+        current_parent_to_record="$branch" # For subsequent branches, the parent is the branch itself.
+        remaining_branches=("${remaining_branches[@]:1}") # Pop the first element
+        
+        echo "LAST_SUCCESSFUL_REBASE_TARGET='$current_rebase_target'" >> "$STATE_FILE"
+        echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$current_parent_to_record'" >> "$STATE_FILE"
+        echo "REMAINING_BRANCHES_TO_REBASE='${remaining_branches[*]}'" >> "$STATE_FILE"
+
+
         # Check if the rebase resulted in an empty branch and warn the user.
         local commit_count
-        commit_count=$(git rev-list --count "${new_base}".."${branch}")
+        commit_count=$(git rev-list --count "${current_parent_to_record}".."${branch}")
         if [[ "$commit_count" -eq 0 ]]; then
             local pr_number_to_check
             pr_number_to_check=$(get_pr_number "$branch")
-            log_warning "After rebasing, branch '$branch' has no new changes compared to '$new_base'."
+            log_warning "After rebasing, branch '$branch' has no new changes compared to '$current_parent_to_record'."
             if [[ -n "$pr_number_to_check" ]]; then
                 log_info "This can happen if changes from this branch were also introduced into its parent."
                 log_info "Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
             fi
         fi
-
-        new_base="$branch"
     done
 }
 
@@ -507,27 +390,6 @@ _finish_operation() {
         done
     fi
 
-     # After a sync, the parent metadata is stale and needs to be repaired.
-    if [[ "${COMMAND}" == "sync" && -n "${UNMERGED_BRANCHES}" ]]; then
-        log_step "Updating stack metadata..."
-        # We need the original list of merged branches to determine the new parent.
-        local merged_branch_list
-        merged_branch_list="${MERGED_BRANCHES_TO_DELETE}"
-        local last_unmerged_ancestor="$BASE_BRANCH"
-        for branch in ${UNMERGED_BRANCHES}; do
-            local original_parent
-            original_parent=$(get_parent_branch "$branch")
-
-            # A branch needs a new parent if its old parent was one of the merged branches.
-            # We also update the parent of the very first branch in the stack.
-            if [[ " ${merged_branch_list} " =~ " ${original_parent} " ]] || [[ "$last_unmerged_ancestor" == "$BASE_BRANCH" ]]; then
-                set_parent_branch "$branch" "$last_unmerged_ancestor"
-                log_info "Set parent of '$branch' to '$last_unmerged_ancestor'."
-            fi
-            last_unmerged_ancestor="$branch"
-        done
-    fi
-
     if git rev-parse --verify "$ORIGINAL_BRANCH" >/dev/null 2>&1; then
         if [[ "$(get_current_branch)" != "$ORIGINAL_BRANCH" ]]; then
             log_info "Returning to original branch '$ORIGINAL_BRANCH'."
@@ -540,7 +402,9 @@ _finish_operation() {
 
     rm -f "$STATE_FILE"
     log_success "Operation complete."
-    log_suggestion "Run 'gss push' to update your remote branches."
+    if [[ "$COMMAND" == "sync" || "$COMMAND" == "restack" ]]; then
+        log_suggestion "Run 'gss push' to update your remote branches."
+    fi
 }
 
 # (New) A centralized guard for commands that require a tracked branch.
@@ -1008,8 +872,8 @@ cmd_submit() {
 
 
 cmd_up() {
-    _guard_dirty_state
     _guard_context "up"
+    _guard_dirty_state
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -1025,8 +889,8 @@ cmd_up() {
 }
 
 cmd_down() {
-    _guard_dirty_state
     _guard_context "down"
+    _guard_dirty_state
     local current_branch
     current_branch=$(get_current_branch)
     
@@ -1063,7 +927,7 @@ cmd_restack() {
     fi
     
     log_info "Detected subsequent stack: ${branches_to_restack[*]}"
-    _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "${branches_to_restack[@]}"
+    _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "$original_branch" "${branches_to_restack[@]}"
     
     _finish_operation
 }
@@ -1080,6 +944,60 @@ cmd_continue() {
         return
     fi
 
+    # shellcheck source=/dev/null
+    source "$STATE_FILE"
+
+    local remaining_branches_array=($REMAINING_BRANCHES_TO_REBASE)
+    if [[ ${#remaining_branches_array[@]} -gt 0 ]]; then
+        log_step "Resuming '$COMMAND' operation..."
+        
+        local conflicted_branch="${remaining_branches_array[0]}"
+
+        # --- Abort Detection ---
+        # If the conflicted branch's history does NOT contain the last successful base,
+        # it means the user must have aborted the rebase.
+        if ! git merge-base --is-ancestor "$LAST_SUCCESSFUL_REBASE_TARGET" "$conflicted_branch"; then
+            log_warning "Rebase for '$conflicted_branch' was not completed."
+            log_info "It appears 'git rebase --abort' may have been run."
+            
+            if [[ "$AUTO_CONFIRM" != true ]]; then
+                log_prompt "Do you want to cancel the entire '$COMMAND' operation?"
+                read -p "(y/N) " -n 1 -r
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    log_error "Cannot continue. The stack is in an inconsistent state."
+                    log_suggestion "Please fix the history of '$conflicted_branch' or run 'gss clean' to reset all metadata."
+                    exit 1
+                fi
+            fi
+
+            log_info "Cancelling operation and cleaning up state."
+            rm -f "$STATE_FILE"
+            exit 0
+        fi
+
+        # --- Normal Continuation ---
+        # The first branch in the list is the one that was just manually fixed.
+        local just_completed_branch="${remaining_branches_array[0]}"
+
+        # The rebase succeeded, so we must update its parent metadata.
+        log_info "Updating metadata for resolved branch '$just_completed_branch'..."
+        set_parent_branch "$just_completed_branch" "$LAST_SUCCESSFUL_PARENT_TO_RECORD"
+
+        # The new base for the rest of the stack is the branch we just fixed.
+        local new_rebase_target="$just_completed_branch"
+        local new_parent_to_record="$just_completed_branch"
+        
+        # The new list of branches to rebase is the rest of the array (the tail).
+        local branches_to_resume=("${remaining_branches_array[@]:1}")
+
+        # If there's more work to do, call the rebase function again with the smaller list.
+        if [[ ${#branches_to_resume[@]} -gt 0 ]]; then
+            _perform_iterative_rebase "$COMMAND" "$ORIGINAL_BRANCH" "$MERGED_BRANCHES_TO_DELETE" "$new_rebase_target" "$new_parent_to_record" "${branches_to_resume[@]}"
+        fi
+    fi
+
+    # Whether we had more work or not, the operation is now ready to be finalized.
     _finish_operation
 }
 
@@ -1160,16 +1078,21 @@ cmd_sync() {
         
         local new_base="origin/$BASE_BRANCH"
         
-        _perform_iterative_rebase "sync" "$original_branch" "${merged_branches[*]}" "$new_base" "${unmerged_branches[@]}"
+        _perform_iterative_rebase "sync" "$original_branch" "${merged_branches[*]}" "$new_base" "$BASE_BRANCH" "${unmerged_branches[@]}"
         
         _finish_operation
 
     else
         log_warning "All branches in the stack were merged. Nothing left to rebase."
+        # Still need to create the state file so finish_operation can clean up.
         if [[ ${#merged_branches[@]} -gt 0 ]]; then
             echo "COMMAND='sync'" > "$STATE_FILE"
             echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
             echo "MERGED_BRANCHES_TO_DELETE='${merged_branches[*]}'" >> "$STATE_FILE"
+            echo "REMAINING_BRANCHES_TO_REBASE=''" >> "$STATE_FILE"
+            echo "LAST_SUCCESSFUL_REBASE_TARGET='$BASE_BRANCH'" >> "$STATE_FILE"
+            echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$BASE_BRANCH'" >> "$STATE_FILE"
+
         fi
         _finish_operation
     fi
@@ -1237,8 +1160,6 @@ cmd_list() {
     log_step "Finding all available stacks..."
     
     # Build the in-memory maps for fast lookups.
-    _ensure_branch_maps_loaded
-
     local bottoms
     bottoms=($(get_all_stack_bottoms))
     
@@ -1540,4 +1461,3 @@ main() {
 }
 
 main "$@"
-
