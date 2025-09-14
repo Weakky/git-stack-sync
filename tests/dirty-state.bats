@@ -221,7 +221,7 @@ create_untracked_file() {
 
     # Action
     # This should succeed because 'amend' should bypass the dirty check.
-    run "$GSS_CMD" amend
+    run "$GSS_CMD" amend --yes
 
     # Assertions
     assert_success

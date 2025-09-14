@@ -639,13 +639,29 @@ cmd_amend() {
         exit 0
     fi
 
+    log_warning "You are about to amend the last commit on '$current_branch'."
+    log_info "This will permanently change the commit history."
+    local child_branch
+    child_branch=$(get_child_branch "$current_branch")
+    if [[ -n "$child_branch" ]]; then
+        log_info "Descendant branches will be rebased on top of the new commit."
+    fi
+
+    if [[ "$AUTO_CONFIRM" != true ]]; then
+        log_prompt "Are you sure you want to continue?"
+        read -p "(y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_warning "Amend cancelled."
+            exit 0
+        fi
+    fi
+
     log_step "Amending changes to the last commit on '$current_branch'..."
     git add .
     git commit --amend --no-edit
     log_success "Commit amended successfully."
 
-    local child_branch
-    child_branch=$(get_child_branch "$current_branch")
     if [[ -n "$child_branch" ]]; then
         # If there are descendants, they need to be rebased. The restack command handles this.
         cmd_restack
