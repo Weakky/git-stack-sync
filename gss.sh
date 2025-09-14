@@ -156,6 +156,14 @@ _ensure_branch_maps_loaded() {
     fi
 }
 
+_guard_dirty_state() {
+    if [[ -n "$(git status --porcelain)" ]]; then
+        log_error "Command cannot run with uncommitted changes in the working directory."
+        log_suggestion "Please 'git commit' or 'git stash' your changes before proceeding."
+        exit 1
+    fi
+}
+
 
 # Helper function to check for GitHub CLI authentication.
 check_gh_auth() {
@@ -648,16 +656,12 @@ cmd_amend() {
 
 cmd_squash() {
     _guard_context "squash"
+    _guard_dirty_state
     
     local direction="parent" # Default direction
     if [[ "$1" == "--into" ]]; then
         direction="$2"
         shift 2
-    fi
-
-    if [[ -n $(git status --porcelain) ]]; then
-        log_error "Cannot squash with uncommitted changes in the working directory."
-        exit 1
     fi
 
     local current_branch
@@ -826,7 +830,11 @@ cmd_create() {
     parent_branch=$(get_current_branch)
     local new_branch=$1
 
-    git checkout -b "$new_branch" >/dev/null 2>&1
+    ## Fails if checkout or branch creation fails.
+    if ! git checkout -b "$new_branch" >/dev/null 2>&1; then
+        _guard_dirty_state
+        exit 1
+    fi
     set_parent_branch "$new_branch" "$parent_branch"
     log_success "Created and checked out new branch '$new_branch' (parent: '$parent_branch')."
     log_suggestion "Add commits or run 'gss create <next-branch>' to extend the stack."
@@ -835,6 +843,7 @@ cmd_create() {
 cmd_insert() {
     check_gh_auth
     _guard_context "insert"
+    _guard_dirty_state
     local before_flag=false
     if [[ "$1" == "--before" ]]; then
         before_flag=true
@@ -885,6 +894,7 @@ cmd_insert() {
 cmd_submit() {
     _guard_context "submit"
     check_gh_auth
+    _guard_dirty_state
     log_step "Syncing stack with GitHub..."
     
     local stack_branches=()
@@ -948,6 +958,7 @@ cmd_submit() {
 
 
 cmd_up() {
+    _guard_dirty_state
     _guard_context "up"
     local current_branch
     current_branch=$(get_current_branch)
@@ -964,6 +975,7 @@ cmd_up() {
 }
 
 cmd_down() {
+    _guard_dirty_state
     _guard_context "down"
     local current_branch
     current_branch=$(get_current_branch)
@@ -981,6 +993,7 @@ cmd_down() {
 
 cmd_restack() {
     _guard_context "restack"
+    _guard_dirty_state
     local original_branch
     original_branch=$(get_current_branch)
     log_step "Restacking branches on top of '$original_branch'..."
@@ -1024,6 +1037,7 @@ cmd_continue() {
 cmd_sync() {
     _guard_context "sync"
     check_gh_auth
+    _guard_dirty_state
     local original_branch
     original_branch=$(get_current_branch)
     
@@ -1128,6 +1142,7 @@ cmd_sync() {
 
 cmd_push() {
     _guard_context "push"
+    _guard_dirty_state
     log_step "Collecting all branches in the stack..."
     local top_branch
     top_branch=$(get_stack_top)
@@ -1489,3 +1504,4 @@ main() {
 }
 
 main "$@"
+
