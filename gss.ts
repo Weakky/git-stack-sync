@@ -562,8 +562,6 @@ async function cmdSync() {
   logStep("Checking PR statuses...");
   const prStatusMap = await fetchPRStates(stack);
 
-  console.log({ prStatusMap });
-
   const mergedBranches: string[] = [];
   const unmergedBranches: string[] = [];
 
