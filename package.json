@@ -1,0 +1,29 @@
+{
+  "name": "gss",
+  "version": "1.0.0",
+  "description": "A CLI for managing stacked Git branches.",
+  "main": "dist/index.js",
+  "bin": {
+    "gss": "dist/index.js"
+  },
+  "scripts": {
+    "build": "ncc build gss.ts -o dist -m",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "git",
+    "stack",
+    "cli"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "zx": "^7.2.3"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1",
+    "typescript": "^5.3.3"
+  }
+}
+
