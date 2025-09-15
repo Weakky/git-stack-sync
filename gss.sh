@@ -877,8 +877,34 @@ cmd_restack() {
     # This tells git to re-apply all commits between `original_branch..top_branch`
     # on top of the *new* version of `original_branch`.
     if git rebase --update-refs --onto "$original_branch" "$original_branch" "$top_branch"; then
-        log_success "Restack complete."
-        # Create a minimal state file so _finish_operation can return to the original branch.
+        log_success "Restack complete. Correcting intermediate branch pointers..."
+
+        # The rebase operation leaves HEAD on the updated top_branch. We use this as our
+        # reliable anchor to walk backwards and fix the pointers of any intermediate
+        # branches that git didn't update because they became empty.
+        local num_branches_rebased=${#branches_to_restack[@]}
+        # We iterate from the branch just below the top one, backwards.
+        for (( i=1; i < num_branches_rebased; i++ )); do
+            # i=1 corresponds to the 2nd branch from the top, which is at HEAD~1
+            local branch_to_fix_index=$((num_branches_rebased - 1 - i))
+            local branch_to_fix="${branches_to_restack[branch_to_fix_index]}"
+            local new_commit_ref="HEAD~${i}"
+            git branch -f "$branch_to_fix" "$new_commit_ref" >/dev/null 2>&1
+        done
+        
+        # Now that all branch pointers are guaranteed to be correct, we can
+        # perform a second pass to check for emptiness and warn the user.
+        local current_parent="$original_branch"
+        for branch in "${branches_to_restack[@]}"; do
+            # Compare the SHAs of the branch and its logical parent.
+            if [[ "$(git rev-parse "$branch")" == "$(git rev-parse "$current_parent")" ]]; then
+                log_warning "After rebasing, branch '$branch' has no new changes compared to '$current_parent'."
+            fi
+            current_parent="$branch"
+        done
+        
+        _repair_stack_metadata "$original_branch" "${branches_to_restack[@]}"
+        
         echo "COMMAND='restack'" > "$STATE_FILE"
         echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
         _finish_operation
@@ -887,7 +913,6 @@ cmd_restack() {
         log_info "Please resolve the conflicts and run 'git rebase --continue'."
         log_suggestion "Once the git rebase is complete, run 'gss continue' to finalize."
 
-        # Save state for `gss continue`. Metadata repair is not needed for restack.
         echo "COMMAND='restack'" > "$STATE_FILE"
         echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
         exit 1
@@ -1412,4 +1437,3 @@ main() {
 }
 
 main "$@"
-
