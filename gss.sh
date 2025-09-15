@@ -500,12 +500,8 @@ cmd_amend() {
     git commit --amend --no-edit
     log_success "Commit amended successfully."
 
-    if [[ -n "$child_branch" ]]; then
-        # If there are descendants, they need to be rebased. The restack command handles this.
-        cmd_restack
-    else
-        log_suggestion "Run 'gss push' to update the remote."
-    fi
+    # After an amend, the entire stack might need updating, so we call the intelligent restack.
+    cmd_restack
 }
 
 cmd_squash() {
@@ -850,33 +846,56 @@ cmd_restack() {
     _guard_dirty_state
     local original_branch
     original_branch=$(get_current_branch)
-    log_step "Restacking branches on top of '$original_branch'..."
 
-    local branches_to_restack=()
-    local current_child
-    current_child=$(get_child_branch "$original_branch")
+    log_step "Checking stack integrity to find point of divergence..."
 
-    while [[ -n "$current_child" ]]; do
-        branches_to_restack+=("$current_child")
-        current_child=$(get_child_branch "$current_child")
+    # 1. Get the full ordered list of branches in the current stack.
+    local full_stack=()
+    local current_branch_for_stack_build
+    current_branch_for_stack_build=$(get_stack_top)
+    while [[ -n "$current_branch_for_stack_build" && "$current_branch_for_stack_build" != "$BASE_BRANCH" ]]; do
+        full_stack=("$current_branch_for_stack_build" "${full_stack[@]}")
+        current_branch_for_stack_build=$(get_parent_branch "$current_branch_for_stack_build")
     done
 
-    if [ ${#branches_to_restack[@]} -eq 0 ]; then
-        log_warning "You are at the top of the stack. Nothing to restack."
+    # 2. Find the first branch that has diverged from its parent.
+    local restack_start_branch=""
+    local branches_to_restack=()
+    local parent_branch="$BASE_BRANCH"
+    local break_found=false
+
+    for child_branch in "${full_stack[@]}"; do
+        if [[ "$break_found" == true ]]; then
+            branches_to_restack+=("$child_branch")
+            continue
+        fi
+        
+        # A branch has diverged if its parent is not one of its ancestors.
+        if ! git merge-base --is-ancestor "$parent_branch" "$child_branch"; then
+            restack_start_branch="$parent_branch"
+            branches_to_restack+=("$child_branch")
+            break_found=true
+        fi
+        parent_branch="$child_branch"
+    done
+    
+    if [[ "$break_found" == false ]]; then
+        log_success "Stack is internally consistent. Nothing to restack."
         return
     fi
     
+    if [ ${#branches_to_restack[@]} -eq 0 ]; then
+        log_warning "Change detected at the top of the stack ('$restack_start_branch'). No descendant branches to restack."
+        return
+    fi
+    
+    log_warning "Detected stack divergence at '$restack_start_branch'. Restacking descendants..."
     local top_branch="${branches_to_restack[${#branches_to_restack[@]}-1]}"
-    log_info "Detected subsequent stack: ${branches_to_restack[*]}"
-    log_step "Restacking descendant branches onto '$original_branch' with --update-refs..."
-
-    # Check out the top branch of the stack segment we intend to rebase.
+    log_info "Will restack the following branches: ${branches_to_restack[*]}"
+    
     git checkout "$top_branch" >/dev/null 2>&1
 
-    # The <old-base> and <new-base> are the same: the branch we started on.
-    # This tells git to re-apply all commits between `original_branch..top_branch`
-    # on top of the *new* version of `original_branch`.
-    if git rebase --update-refs --onto "$original_branch" "$original_branch" "$top_branch"; then
+    if git rebase --update-refs --onto "$restack_start_branch" "$restack_start_branch" "$top_branch"; then
         log_success "Restack complete. Correcting intermediate branch pointers..."
 
         # The rebase operation leaves HEAD on the updated top_branch. We use this as our
@@ -894,7 +913,7 @@ cmd_restack() {
         
         # Now that all branch pointers are guaranteed to be correct, we can
         # perform a second pass to check for emptiness and warn the user.
-        local current_parent="$original_branch"
+        local current_parent="$restack_start_branch"
         for branch in "${branches_to_restack[@]}"; do
             # Compare the SHAs of the branch and its logical parent.
             if [[ "$(git rev-parse "$branch")" == "$(git rev-parse "$current_parent")" ]]; then
@@ -903,7 +922,7 @@ cmd_restack() {
             current_parent="$branch"
         done
         
-        _repair_stack_metadata "$original_branch" "${branches_to_restack[@]}"
+        _repair_stack_metadata "$restack_start_branch" "${branches_to_restack[@]}"
         
         echo "COMMAND='restack'" > "$STATE_FILE"
         echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
@@ -1437,3 +1456,4 @@ main() {
 }
 
 main "$@"
+

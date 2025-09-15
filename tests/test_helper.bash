@@ -168,3 +168,12 @@ assert_remote_branch_matches_local() {
 
     assert_equal "$local_sha" "$remote_sha" "Expected local branch '$branch' to match 'origin/$branch'."
 }
+
+## Asserts that the current branch is the expected one.
+# Usage: assert_current_branch <expected_branch>
+assert_current_branch() {
+    local expected_branch=$1
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    assert_equal "$expected_branch" "$current_branch" "Expected current branch to be '$expected_branch', but it is '$current_branch'."
+}
