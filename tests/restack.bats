@@ -153,19 +153,18 @@ teardown() {
     run git checkout br3
     run create_commit "amend br3" "new content" "file3.txt"
     run git commit --amend --no-edit
-
-    gss_debug_dump "State before restack"
     
     # Action
     run "$GSS_CMD" restack
 
     # Assertions
     assert_success
-    assert_output --partial "Change detected at the top of the stack ('br3'). No descendant branches to restack."
+    # New commit is at the top. Nothing to restack.
+    assert_output --partial "Stack is internally consistent. Nothing to restack."
 
     # --- State Assertions ---
     # Only br3's SHA should have changed.
-    refute_equal "$shas_before" "$(get_all_branch_shas)"
+    assert_not_equal "$shas_before" "$(get_all_branch_shas)"
     assert_current_branch br3
 }
 
@@ -209,7 +208,7 @@ teardown() {
 @test "smart restack: diverged base of stack" {
     # SCENARIO: The bottom branch of the stack is rebased onto a different
     # commit on main. This is a common scenario when cleaning up history.
-    # `restack` should detect the break between `main` and `br1`.
+    # `restack` should detect the break between `br1` and `br2`.
     
     # Setup
     # 1. Create a new commit on main to rebase onto.
@@ -217,6 +216,7 @@ teardown() {
     run create_commit "new base for stack"
     local new_main_sha; new_main_sha=$(git rev-parse HEAD)
     # 2. Rebase br1 onto it, but don't touch br2 or br3 yet.
+    # This maintains the gss parent config but breaks the ancestry chain.
     run git rebase --onto "$new_main_sha" main~1 br1
     local new_br1_sha; new_br1_sha=$(git rev-parse HEAD)
 
@@ -226,7 +226,8 @@ teardown() {
 
     # Assertions
     assert_success
-    assert_output --partial "Detected stack divergence at 'main'"
+    # The script correctly finds the *first* broken link, which is between br1 and br2.
+    assert_output --partial "Detected stack divergence at 'br1'"
 
     # --- State Assertions ---
     # The entire stack should be moved.

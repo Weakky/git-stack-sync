@@ -849,56 +849,47 @@ cmd_restack() {
 
     log_step "Checking stack integrity to find point of divergence..."
 
-    local stack_bottom
-    stack_bottom=$(get_stack_bottom)
+    # 1. Get the full ordered list of branches in the current stack.
+    local full_stack=()
+    local current_branch_for_stack_build
+    current_branch_for_stack_build=$(get_stack_top)
+    while [[ -n "$current_branch_for_stack_build" && "$current_branch_for_stack_build" != "$BASE_BRANCH" ]]; do
+        full_stack=("$current_branch_for_stack_build" "${full_stack[@]}")
+        current_branch_for_stack_build=$(get_parent_branch "$current_branch_for_stack_build")
+    done
 
+    # 2. Find the first branch that has diverged from its parent.
     local restack_start_branch=""
-    local current_scan_branch="$stack_bottom"
-    local parent_scan_branch
-    parent_scan_branch=$(get_parent_branch "$current_scan_branch")
+    local branches_to_restack=()
+    local parent_branch="$BASE_BRANCH"
+    local break_found=false
 
-    # First, check if the bottom of the stack has diverged from its parent.
-    if ! git merge-base --is-ancestor "$parent_scan_branch" "$current_scan_branch"; then
-        restack_start_branch="$parent_scan_branch"
-    else
-        # Now, walk up the stack to find the first parent/child link that is broken.
-        while [[ -n "$current_scan_branch" ]]; do
-            local child_scan_branch
-            child_scan_branch=$(get_child_branch "$current_scan_branch")
-            if [[ -z "$child_scan_branch" ]]; then
-                break # Reached the top, stack is consistent
-            fi
-            
-            if ! git merge-base --is-ancestor "$current_scan_branch" "$child_scan_branch"; then
-                restack_start_branch="$current_scan_branch"
-                break
-            fi
-            
-            current_scan_branch="$child_scan_branch"
-        done
-    fi
-
-    if [[ -z "$restack_start_branch" ]]; then
+    for child_branch in "${full_stack[@]}"; do
+        if [[ "$break_found" == true ]]; then
+            branches_to_restack+=("$child_branch")
+            continue
+        fi
+        
+        # A branch has diverged if its parent is not one of its ancestors.
+        if ! git merge-base --is-ancestor "$parent_branch" "$child_branch"; then
+            restack_start_branch="$parent_branch"
+            branches_to_restack+=("$child_branch")
+            break_found=true
+        fi
+        parent_branch="$child_branch"
+    done
+    
+    if [[ "$break_found" == false ]]; then
         log_success "Stack is internally consistent. Nothing to restack."
         return
     fi
-
-    log_warning "Detected stack divergence at '$restack_start_branch'. Restacking descendants..."
-
-    local branches_to_restack=()
-    local current_child
-    current_child=$(get_child_branch "$restack_start_branch")
-
-    while [[ -n "$current_child" ]]; do
-        branches_to_restack+=("$current_child")
-        current_child=$(get_child_branch "$current_child")
-    done
-
+    
     if [ ${#branches_to_restack[@]} -eq 0 ]; then
         log_warning "Change detected at the top of the stack ('$restack_start_branch'). No descendant branches to restack."
         return
     fi
     
+    log_warning "Detected stack divergence at '$restack_start_branch'. Restacking descendants..."
     local top_branch="${branches_to_restack[${#branches_to_restack[@]}-1]}"
     log_info "Will restack the following branches: ${branches_to_restack[*]}"
     
@@ -1465,3 +1456,4 @@ main() {
 }
 
 main "$@"
+
