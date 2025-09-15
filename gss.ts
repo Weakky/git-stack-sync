@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { $, chalk, fs, path, question } from 'zx';
+import { $, chalk, fs, path, ProcessOutput, question } from 'zx';
 
 $.verbose = false;
 
@@ -253,24 +253,35 @@ async function initializeConfig() {
   try {
     const cacheContent = await fs.readFile(configCacheFile, 'utf-8');
     const cache = JSON.parse(cacheContent);
-    config.baseBranch = cache.baseBranch;
-    config.ghUser = cache.ghUser;
-    config.ghRepo = cache.ghRepo;
-    if (config.baseBranch && config.ghUser && config.ghRepo) {
+    if (cache.baseBranch && cache.ghUser && cache.ghRepo) {
+      config.baseBranch = cache.baseBranch;
+      config.ghUser = cache.ghUser;
+      config.ghRepo = cache.ghRepo;
       return;
     }
   } catch (error) {
-    // Cache is invalid or doesn't exist
+    // Cache is invalid or doesn't exist, proceed to fetch
   }
 
   logStep('Initializing configuration (first run or cache is invalid)...');
   try {
-    const repoInfo = JSON.parse((await $`gh repo view --json owner,name,defaultBranchRef`).stdout);
-    config.ghUser = repoInfo.owner.login;
-    config.ghRepo = repoInfo.name;
-    config.baseBranch = repoInfo.defaultBranchRef.name;
+    const { stdout } = await $`gh repo view --json owner,name,defaultBranchRef --jq '{ "owner": .owner.login, "name": .name, "base": .defaultBranchRef.name }'`;
+    const repoInfo = JSON.parse(stdout);
 
-    await fs.writeFile(configCacheFile, JSON.stringify(config, null, 2));
+    if (!repoInfo.owner || !repoInfo.name || !repoInfo.base) {
+      throw new Error("Failed to parse repository details from GitHub.");
+    }
+
+    config.ghUser = repoInfo.owner;
+    config.ghRepo = repoInfo.name;
+    config.baseBranch = repoInfo.base;
+
+    const cachePayload = {
+      baseBranch: config.baseBranch,
+      ghUser: config.ghUser,
+      ghRepo: config.ghRepo,
+    };
+    await fs.writeFile(configCacheFile, JSON.stringify(cachePayload, null, 2));
     logSuccess('Configuration cached for future runs.');
   } catch (error) {
     logError('Could not determine GitHub repository context.');
@@ -288,6 +299,8 @@ async function cmdCreate(branchName?: string) {
     process.exit(1);
   }
 
+  const parentBranch = await getCurrentBranch();
+
   try {
     await $`git checkout -b ${branchName}`;
   } catch {
@@ -296,7 +309,6 @@ async function cmdCreate(branchName?: string) {
     process.exit(1);
   }
 
-  const parentBranch = (await $`git rev-parse --abbrev-ref HEAD~1`).stdout.trim();
   await setParentBranch(branchName, parentBranch);
   logSuccess(`Created and checked out new branch '${branchName}' (parent: '${parentBranch}').`);
   logSuggestion(`Add commits or run 'gss create <next-branch>' to extend the stack.`);
@@ -484,48 +496,78 @@ async function cmdSync() {
 
 async function cmdList() {
   logStep("Finding all available stacks...");
-  const allConfigs = (await $`git config --get-regexp ^branch\\..*\\.parent$`).stdout.trim();
-  if (!allConfigs) {
+  let allConfigs = '';
+
+  try {
+    allConfigs = (await $`git config --get-regexp '^branch\..*\.parent$'`).stdout.trim();
+  } catch (err: unknown) {
+    // Check if err is ProcessOutput
+    if (err instanceof ProcessOutput) {
+      // If it throws, check if it's the expected "not found" error
+      if (err.exitCode !== 1) {
+        // This is an unexpected error, so we should re-throw it.
+        throw err;
+      }
+    }
+  }
+
+  if (allConfigs.length === 0) {
     logWarning("No gss stacks found.");
     return;
   }
 
-  const parentMap = new Map<string, string>();
   const childrenMap = new Map<string, string[]>();
 
   allConfigs.split('\n').forEach(line => {
     const match = line.match(/^branch\.(.*)\.parent (.*)$/);
+
     if (match) {
       const child = match[1];
       const parent = match[2];
-      parentMap.set(child, parent);
-      if (!childrenMap.has(parent)) childrenMap.set(parent, []);
+
+      if (!childrenMap.has(parent)) {
+        childrenMap.set(parent, []);
+      }
       childrenMap.get(parent)!.push(child);
     }
   });
 
   const bottoms = childrenMap.get(config.baseBranch) || [];
-  if (bottoms.length === 0) {
-    logWarning("No gss stacks found.");
-    return;
-  }
 
-  logSuccess("Found stack(s):");
+  // Check if any stacks has a children.
+  // If so, log "Found stack(s)" with all stacks having more than one children
+  let foundStacks = 0;
+
   for (const bottom of bottoms) {
     let count = 1;
-    let current = bottom;
+    let currentBranch = bottom;
+
     while (true) {
-      const children = childrenMap.get(current);
-      if (children && children.length > 0) {
-        current = children[0]; // Simple assumption for now
-        count++;
+      const children = childrenMap.get(currentBranch);
+
+      if (children) {
+        currentBranch = children[0];
+        count += 1;
       } else {
         break;
       }
     }
+
     if (count > 1) {
+      if (foundStacks == 0) {
+        logSuccess("Found stack(s):")
+      }
+
+      foundStacks += 1;
       logInfo(`- ${bottom} (${count} branches)`);
     }
+  }
+
+  if (foundStacks == 0) {
+    logWarning("No gss stacks found.")
+    logSuggestion("Run 'gss create <branch-name>' from '$BASE_BRANCH' or an existing branch to start a new stack.")
+  } else {
+    logSuggestion("Run 'git checkout <branch>' to switch to a stack and see its status.")
   }
 }
 
@@ -743,15 +785,24 @@ async function cmdTrack(subcommand: string, parent?: string) {
     logSuccess(`Set parent of '${currentBranch}' to '${parentBranch}'.`);
   } else if (subcommand === 'remove') {
     await guardContext('track remove');
-    const parent = await getParentBranch(currentBranch);
-    const commitCount = parseInt((await $`git rev-list --count ${parent}..${currentBranch}`).stdout);
+    const parentBranch = await getParentBranch(currentBranch);
+
+    // Safeguard: only allow removal if the branch has no unique commits.
+    const commitCount = parseInt((await $`git rev-list --count ${parentBranch}..${currentBranch}`).stdout);
     if (commitCount > 0) {
       logError(`Cannot untrack '${currentBranch}' because it contains unique commits.`);
       logSuggestion("Consider running 'gss squash' to integrate its changes.");
       process.exit(1);
     }
+
     await unsetParentBranch(currentBranch);
     logSuccess(`Stopped tracking '${currentBranch}'.`);
+    const childBranches = await getChildBranches(currentBranch);
+
+    for (const childBranch of childBranches) {
+      logInfo(`Reparing stack: setting parent of ${childBranch} to ${parentBranch}`)
+      setParentBranch(childBranch, parentBranch)
+    }
   } else {
     logError(`Unknown subcommand for track: ${subcommand}. Use 'set' or 'remove'.`);
     printHelp();
