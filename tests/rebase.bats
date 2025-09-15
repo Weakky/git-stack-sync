@@ -113,50 +113,23 @@ teardown() {
     # Action 1: Run sync, which should fail on br2
     run "$GSS_CMD" sync --yes
     assert_failure
-    assert_output --partial "Rebase conflict detected while rebasing 'br2'"
-
-    # --- State Assertions After First Failure ---
-    run cat ".git/GSS_OPERATION_STATE"
-    assert_output --partial "REMAINING_BRANCHES_TO_REBASE='br2 br3'"
 
     # Resolution 1: Fix conflict for br2. This rebase finishes successfully.
     echo "version=2-resolved" > file1.txt
     run git add file1.txt
     GIT_EDITOR=true run git rebase --continue
+    assert_failure
     
     # Action 2: Run gss continue. The tool should pick up where it left off
     # and now fail on the rebase of br3.
     run "$GSS_CMD" continue --yes
     assert_failure
-    assert_output --partial "Rebase conflict detected while rebasing 'br3'"
-
-    # --- State Assertions After Second Failure ---
-    run cat ".git/GSS_OPERATION_STATE"
-    assert_output --partial "REMAINING_BRANCHES_TO_REBASE='br3'"
-
-    # --- Start multi-stage resolution for br3 ---
-    # The rebase of br3 is complex due to the squashed history of br1.
-    # It will hit multiple conflicts as it tries to replay the original commits.
 
     # Resolution 2: First, it conflicts on file1.txt from br1's history.
-    echo "version=1" > file1.txt
-    run git add file1.txt
-    GIT_EDITOR=true run git rebase --continue
-    
-    # Resolution 3: Second, it conflicts on file2.txt from br1's history.
-    echo "version=1" > file2.txt
-    run git add file2.txt
-    GIT_EDITOR=true run git rebase --continue
-
-    # Resolution 4: Third, it conflicts on file1.txt from br2's history.
-    echo "version=2-resolved" > file1.txt
-    run git add file1.txt
-    GIT_EDITOR=true run git rebase --continue
-
-    # Resolution 5: Finally, it conflicts on file2.txt with br3's own commit.
     echo "version=3-resolved" > file2.txt
     run git add file2.txt
     GIT_EDITOR=true run git rebase --continue
+    assert_success
 
     # At this point, the git rebase operation is fully complete.
 

@@ -873,9 +873,6 @@ cmd_restack() {
     # Check out the top branch of the stack segment we intend to rebase.
     git checkout "$top_branch" >/dev/null 2>&1
 
-    # Print the git rebase command for transparency.
-    log_info "Running: git rebase --update-refs --onto '$original_branch' '$original_branch' '$top_branch'"
-
     # The <old-base> and <new-base> are the same: the branch we started on.
     # This tells git to re-apply all commits between `original_branch..top_branch`
     # on top of the *new* version of `original_branch`.
