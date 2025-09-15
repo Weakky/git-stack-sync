@@ -5,16 +5,17 @@ load 'bats-assert/load'
 load 'test_helper'
 load 'debug'
 
-# --- Variables ---
-GSS_CMD_BASE="$BATS_TEST_DIRNAME/../gss"
+# --- Variables and Pre-run Checks ---
+GSS_CMD_BASE="$BATS_TEST_DIRNAME/../dist/index"
 GSS_CMD=""
 
+# Auto-detect whether the script is named 'gss' or 'gss.sh'
 if [[ -f "$GSS_CMD_BASE" ]]; then
     GSS_CMD="$GSS_CMD_BASE"
-elif [[ -f "${GSS_CMD_BASE}.sh" ]]; then
-    GSS_CMD="${GSS_CMD_BASE}.sh"
+elif [[ -f "${GSS_CMD_BASE}.js" ]]; then
+    GSS_CMD="${GSS_CMD_BASE}.js"
 else
-    echo "🔴 Error: Could not find the gss script." >&2
+    echo "🔴 Error: Could not find the gss script. Looked for '$GSS_CMD_BASE' and '${GSS_CMD_BASE}.sh'." >&2
     exit 1
 fi
 export PATH="$BATS_TEST_DIRNAME/mocks:$PATH"

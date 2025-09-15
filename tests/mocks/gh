@@ -27,7 +27,7 @@ elif [[ "$1" == "pr" && "$2" == "view" ]]; then
     fi
 
     if [[ "$4" == "--json" && "$5" == "state" ]]; then
-         echo "$pr_state"
+         echo "{\"state\":\"$pr_state\"}"
          exit 0
     fi
     if [[ "$4" == "--json" && "$5" == "state,url" ]]; then

@@ -6,14 +6,14 @@ load 'test_helper'
 load 'debug' # Load the new debug helper
 
 # --- Variables and Pre-run Checks ---
-GSS_CMD_BASE="$BATS_TEST_DIRNAME/../gss"
+GSS_CMD_BASE="$BATS_TEST_DIRNAME/../dist/index"
 GSS_CMD=""
 
 # Auto-detect whether the script is named 'gss' or 'gss.sh'
 if [[ -f "$GSS_CMD_BASE" ]]; then
     GSS_CMD="$GSS_CMD_BASE"
-elif [[ -f "${GSS_CMD_BASE}.sh" ]]; then
-    GSS_CMD="${GSS_CMD_BASE}.sh"
+elif [[ -f "${GSS_CMD_BASE}.js" ]]; then
+    GSS_CMD="${GSS_CMD_BASE}.js"
 else
     echo "🔴 Error: Could not find the gss script. Looked for '$GSS_CMD_BASE' and '${GSS_CMD_BASE}.sh'." >&2
     exit 1
@@ -276,8 +276,8 @@ teardown() {
     # A state file should exist to allow 'gss continue' to resume.
     assert [ -f ".git/GSS_OPERATION_STATE" ]
     run cat ".git/GSS_OPERATION_STATE"
-    assert_output --partial "COMMAND='sync'"
-    assert_output --partial "ORIGINAL_BRANCH='feature-a'"
+    assert_output --partial "\"command\": \"sync\""
+    assert_output --partial "\"originalBranch\": \"feature-a\""
 }
 
 @test "sync: 'continue' resumes after a sync conflict" {
@@ -647,8 +647,8 @@ teardown() {
     # --- State Assertions ---
     assert [ -f ".git/GSS_OPERATION_STATE" ]
     run cat ".git/GSS_OPERATION_STATE"
-    assert_output --partial "COMMAND='restack'"
-    assert_output --partial "ORIGINAL_BRANCH='feature-a'"
+    assert_output --partial "\"command\": \"restack\""
+    assert_output --partial "\"originalBranch\": \"feature-a\""
 }
 
 @test "restack: 'continue' resumes after a restack conflict" {
