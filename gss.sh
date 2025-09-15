@@ -792,10 +792,12 @@ cmd_submit() {
         
         local new_pr_number
         new_pr_number=$(echo "$pr_response" | jq -r '.number')
+        local new_pr_url
+        new_pr_url=$(echo "$pr_response" | jq -r '.html_url')
         
         if [[ -n "$new_pr_number" && "$new_pr_number" != "null" ]]; then
             set_pr_number "$branch_name" "$new_pr_number"
-            log_success "Created PR #${new_pr_number} for '$branch_name'."
+            log_success "Created PR #${new_pr_number} for '$branch_name': $new_pr_url"
         else
             log_error "Failed to create PR for '$branch_name'."
             log_info "Response from GitHub: $pr_response"
@@ -885,7 +887,10 @@ cmd_restack() {
     fi
     
     if [ ${#branches_to_restack[@]} -eq 0 ]; then
-        log_warning "Change detected at the top of the stack ('$restack_start_branch'). No descendant branches to restack."
+        # This case is now handled by the "break_found" logic. If the top branch
+        # is amended, no break is found, so this block is effectively unreachable.
+        # It's kept for logical safety.
+        log_success "Stack is internally consistent. Nothing to restack."
         return
     fi
     
