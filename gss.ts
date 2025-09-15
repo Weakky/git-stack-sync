@@ -914,19 +914,37 @@ async function cmdClean() {
 
 async function cmdAmend() {
   await guardContext("amend");
-  // Amend is a special case that should operate on staged changes
-  await guardDirtyState({ allowStaged: true });
+  const currentBranch = await getCurrentBranch();
 
-  logWarning("You are about to amend the last commit.");
-  if (await confirm("Are you sure you want to continue?")) {
-    logStep("Amending changes...");
-    await $`git add .`;
-    await $`git commit --amend --no-edit`;
-    logSuccess("Commit amended successfully.");
-    await cmdRestack();
-  } else {
-    logWarning("Amend cancelled.");
+  // Check if there are any changes (staged or unstaged)
+  const status = (await $`git status --porcelain`).stdout.trim();
+
+  if (!status) {
+    logWarning("No changes (staged or unstaged) to amend.");
+    process.exit(0);
   }
+
+  logWarning(`You are about to amend the last commit on '${currentBranch}'.`);
+  logWarning("This will permanently change the commit history.");
+
+  const childBranches = await getChildBranches(currentBranch);
+
+  if (childBranches.length > 0) {
+    logInfo("Descendant branches will be rebased on top of the new commit.");
+  }
+
+  if (!(await confirm("Are you sure you want to continue?"))) {
+    logWarning("Amend cancelled.");
+    process.exit(0);
+  }
+
+  logStep(`Amending changes to the last commit on '${currentBranch}'...`);
+  await $`git add .`;
+  await $`git commit --amend --no-edit`;
+  logSuccess("Commit amended successfully.");
+
+  // After an amend, the entire stack might need updating, so we call the intelligent restack.
+  await cmdRestack();
 }
 
 async function cmdRestack() {
