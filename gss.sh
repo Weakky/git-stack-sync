@@ -4,9 +4,20 @@
 
 set -e
 
+# --- Find Git Root and Set Up Environment ---
+# Suppress git's error message so we can provide our own.
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || true
+
+if [[ -z "$GIT_ROOT" ]]; then
+    # Use a direct echo here since the logging functions may not be loaded yet.
+    echo "🔴 Error: Not a git repository. Please run gss from within a git repository." >&2
+    exit 1
+fi
+
 # --- Internal State ---
-STATE_FILE=".git/GSS_OPERATION_STATE"
-CONFIG_CACHE_FILE=".git/GSS_CONFIG_CACHE"
+# These paths are now relative to the repo root, which is our current directory.
+STATE_FILE="$GIT_ROOT/.git/GSS_OPERATION_STATE"
+CONFIG_CACHE_FILE="$GIT_ROOT/.git/GSS_CONFIG_CACHE"
 AUTO_CONFIRM=false # Global flag for --yes
 
 # --- Color Constants ---
