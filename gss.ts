@@ -16,6 +16,7 @@ interface GssState {
 }
 
 // --- State and Configuration ---
+let gitRoot: string;
 let stateFile: string;
 let configCacheFile: string;
 let autoConfirm = false;
@@ -52,12 +53,9 @@ function logSuggestion(message: string) {
 }
 
 // --- Git & System Helpers ---
-function getGitRoot(): string | null {
+async function getGitRoot(): Promise<string | null> {
   try {
-    return require("child_process")
-      .execSync("git rev-parse --show-toplevel")
-      .toString()
-      .trim();
+    return (await $`git rev-parse --show-toplevel`).stdout.trim();
   } catch (e) {
     return null;
   }
@@ -65,6 +63,7 @@ function getGitRoot(): string | null {
 
 async function guardDirtyState(options: { allowStaged?: boolean } = {}) {
   let status = (await $`git status --porcelain`).stdout.trim();
+
   if (options.allowStaged) {
     // Filter out staged changes (lines starting with A, M, D, R, C followed by a space)
     status = status
@@ -72,6 +71,7 @@ async function guardDirtyState(options: { allowStaged?: boolean } = {}) {
       .filter((line) => !/^[AMDRC] /.test(line))
       .join("\n");
   }
+
   if (status) {
     logError(
       "Command cannot run with uncommitted changes in the working directory."
@@ -110,6 +110,7 @@ async function getChildBranches(parentBranch: string): Promise<string[]> {
     const configLines = (
       await $`git config --get-regexp ^branch\\..*\\.parent$`
     ).stdout.trim();
+
     return configLines
       .split("\n")
       .filter((line) => line.endsWith(` ${parentBranch}`))
@@ -120,28 +121,32 @@ async function getChildBranches(parentBranch: string): Promise<string[]> {
   }
 }
 
-async function getStackTop(startBranch?: string): Promise<string> {
-  let currentTop = startBranch || (await getCurrentBranch());
+async function getStackTop(): Promise<string> {
+  let currentBranch = await getCurrentBranch();
+
   while (true) {
     // In a forked stack, this will just pick the first child it finds.
-    const children = await getChildBranches(currentTop);
-    if (children.length > 0) {
-      currentTop = children[0];
+    const children = await getChildBranches(currentBranch);
+    if (children.length > 0 && children[0] !== undefined) {
+      currentBranch = children[0];
     } else {
       break;
     }
   }
-  return currentTop;
+  return currentBranch;
 }
 
-async function getFullStack(startBranch?: string): Promise<string[]> {
-  const top = await getStackTop(startBranch);
+async function getFullStack(): Promise<string[]> {
+  const top = await getStackTop();
   const stack: string[] = [];
+
   let current: string | null = top;
+
   while (current && current !== config.baseBranch) {
     stack.unshift(current);
     current = await getParentBranch(current);
   }
+
   return stack;
 }
 
@@ -181,6 +186,7 @@ async function confirm(prompt: string): Promise<boolean> {
 
 async function guardContext(commandName: string) {
   const currentBranch = await getCurrentBranch();
+
   if (currentBranch === config.baseBranch) {
     logError(
       `The '${commandName}' command cannot be run from the base branch ('${config.baseBranch}').`
@@ -188,7 +194,9 @@ async function guardContext(commandName: string) {
     await cmdList();
     process.exit(1);
   }
+
   const parent = await getParentBranch(currentBranch);
+
   if (!parent) {
     logError(`The '${commandName}' command requires a tracked branch.`);
     logInfo(`Branch '${currentBranch}' is not currently tracked by gss.`);
@@ -454,16 +462,60 @@ async function cmdSubmit() {
   logSuccess("Stack submission complete.");
 }
 
-type PrState = {
-  state: "MERGED" | "CLOSED" | "OPEN";
+type PRState = "MERGED" | "CLOSED" | "OPEN" | "UNSUBMITTED" | "FETCH_FAILED";
+
+type GithubPRInfoResponse = {
+  state: PRState;
+  prNumber: number | null;
+  url: string | null;
 };
 
-async function fetchPrState(prNumber: number): Promise<PrState> {
-  const json = (await $`gh pr view ${prNumber} --json state`).stdout;
-  console.log({ json });
+async function fetchPRState(prNumber: number): Promise<GithubPRInfoResponse> {
+  const json = (await $`gh pr view ${prNumber} --json state,url`).stdout;
   const parsed = JSON.parse(json);
 
-  return parsed as PrState;
+  return { ...parsed, prNumber } satisfies GithubPRInfoResponse;
+}
+
+async function fetchPRStates(
+  stack: string[]
+): Promise<Map<string, GithubPRInfoResponse>> {
+  const prStatusPromises = stack.map(async (branch) => {
+    const prNumber = await getPrNumber(branch);
+
+    if (!prNumber) {
+      return {
+        branch,
+        info: {
+          state: "UNSUBMITTED",
+          prNumber: null,
+          url: null,
+        } satisfies GithubPRInfoResponse,
+      };
+    }
+
+    try {
+      let response = await fetchPRState(prNumber);
+
+      return { branch, info: response };
+    } catch {
+      return {
+        branch,
+        info: {
+          state: "FETCH_FAILED",
+          prNumber,
+          url: null,
+        } satisfies GithubPRInfoResponse,
+      };
+    }
+  });
+
+  const prResults = await Promise.all(prStatusPromises);
+  const prStatusMap = new Map(
+    prResults.map((result) => [result.branch, result.info])
+  );
+
+  return prStatusMap;
 }
 
 async function cmdSync() {
@@ -479,6 +531,8 @@ async function cmdSync() {
 
   logInfo(`Updating local base branch '${config.baseBranch}'...`);
   await $`git checkout ${config.baseBranch}`;
+
+  // Attempt pulling latest changes on trunk
   try {
     await $`git pull --ff-only origin ${config.baseBranch}`;
   } catch {
@@ -491,9 +545,11 @@ async function cmdSync() {
     logSuggestion(
       `Consider running 'git checkout ${config.baseBranch} && git reset --hard origin/${config.baseBranch}'.`
     );
+    // Go back to original branch before exiting
     await $`git checkout ${originalBranch}`;
     process.exit(1);
   }
+
   logSuccess("Local base branch is up to date.");
   await $`git checkout ${originalBranch}`;
 
@@ -503,19 +559,16 @@ async function cmdSync() {
     return;
   }
 
+  logStep("Checking PR statuses...");
+  const prStatusMap = await fetchPRStates(stack);
+
+  console.log({ prStatusMap });
+
   const mergedBranches: string[] = [];
   const unmergedBranches: string[] = [];
 
   for (const branch of stack) {
-    let isMerged = false;
-    const prNumber = await getPrNumber(branch);
-    if (prNumber) {
-      logInfo(`Checking status of PR #${prNumber} for branch '${branch}'...`);
-      const prState = await fetchPrState(prNumber);
-      if (prState.state === "MERGED") {
-        isMerged = true;
-      }
-    }
+    let isMerged = prStatusMap.get(branch)?.state === "MERGED" || false;
 
     if (!isMerged) {
       try {
@@ -540,8 +593,10 @@ async function cmdSync() {
       `Rebasing remaining stack onto '${config.baseBranch}' with --update-refs...`
     );
     const topBranch = unmergedBranches[unmergedBranches.length - 1];
-    const bottomBranch = unmergedBranches[0];
+    // SAFETY: We check `unmergedBranches` length above
+    const bottomBranch = unmergedBranches[0]!;
     const oldBase = await getParentBranch(bottomBranch);
+
     if (!oldBase) {
       logError(
         `Could not determine the original base of the stack (parent of '${bottomBranch}'). Aborting.`
@@ -621,6 +676,11 @@ async function cmdList() {
       const child = match[1];
       const parent = match[2];
 
+      if (!parent || !child) {
+        logError(`Unexpected metadata stored in git config. Found: '${line}'.`);
+        process.exit(1);
+      }
+
       if (!childrenMap.has(parent)) {
         childrenMap.set(parent, []);
       }
@@ -641,7 +701,7 @@ async function cmdList() {
     while (true) {
       const children = childrenMap.get(currentBranch);
 
-      if (children) {
+      if (children && children[0] !== undefined) {
         currentBranch = children[0];
         count += 1;
       } else {
@@ -708,6 +768,8 @@ async function cmdStatus() {
   console.log(`➡️  ${config.baseBranch} (${baseStatus})`);
   console.log("");
 
+  const prInfoMap = await fetchPRStates(stack);
+
   let stackNeedsPush = false;
   let stackNeedsRestack = false;
   let stackIsOutOfSyncWithBase = false;
@@ -759,23 +821,19 @@ async function cmdStatus() {
     console.log(`   ├─ Status: ${statusMessage}`);
 
     // --- PR Line ---
-    const prNumber = await getPrNumber(branch);
-    let prStatus = "";
-    if (prNumber) {
-      try {
-        const { stdout } = await $`gh pr view ${prNumber} --json state,url`;
-        const prInfo = JSON.parse(stdout);
+    const prInfo = prInfoMap.get(branch);
 
-        if (prInfo.state === "OPEN") {
-          prStatus = `🟢 #${prNumber}: OPEN - ${prInfo.url}`;
-        } else if (prInfo.state === "MERGED") {
-          prStatus = `🟣 #${prNumber}: MERGED`;
-          stackHasMergedBranches = true;
-        } else if (prInfo.state === "CLOSED") {
-          prStatus = `🔴 #${prNumber}: CLOSED`;
-        }
-      } catch {
-        prStatus = `🟡 Could not fetch status for PR #${prNumber}`;
+    let prStatus = "";
+    if (prInfo && prInfo.prNumber) {
+      if (prInfo.state === "OPEN") {
+        prStatus = `🟢 #${prInfo.prNumber}: OPEN - ${prInfo.url}`;
+      } else if (prInfo.state === "MERGED") {
+        prStatus = `🟣 #${prInfo.prNumber}: MERGED`;
+        stackHasMergedBranches = true;
+      } else if (prInfo.state === "CLOSED") {
+        prStatus = `🔴 #${prInfo.prNumber}: CLOSED`;
+      } else if (prInfo.state === "FETCH_FAILED") {
+        prStatus = `🟡 Could not fetch status for PR #${prInfo.prNumber}`;
       }
     } else {
       prStatus = "⚪ No PR submitted";
@@ -809,8 +867,9 @@ async function cmdStatus() {
 
 async function cmdContinue() {
   const rebaseInProgress = await fs.exists(
-    path.join(getGitRoot()!, ".git/rebase-merge")
+    path.join(gitRoot, ".git", "rebase-merge")
   );
+
   if (rebaseInProgress) {
     logError("A git rebase is still in progress.");
     logSuggestion(
@@ -880,9 +939,17 @@ async function cmdRestack() {
   // 1. Get the full ordered list of branches in the current stack.
   const fullStack = await getFullStack();
 
+  if (fullStack.length == 0) {
+    logError("Empty stack found. Nothing to restack.");
+    process.exit(1);
+  }
+
+  // SAFETY: `fullStack` length is checked above
+  let parentBranch =
+    (await getParentBranch(fullStack[0]!)) || config.baseBranch;
+
   let restackStartBranch: string | null = null;
   const branchesToRestack: string[] = [];
-  let parentBranch = (await getParentBranch(fullStack[0])) || config.baseBranch;
   let divergenceFound = false;
 
   // 2. Find the first branch that has diverged from its parent.
@@ -984,8 +1051,9 @@ async function cmdPr() {
   }
 }
 
-async function cmdTrack(subcommand: string, parent?: string) {
+async function cmdTrack(subcommand?: string, parent?: string) {
   const currentBranch = await getCurrentBranch();
+
   if (subcommand === "set") {
     const parentBranch = parent || config.baseBranch;
     try {
@@ -1031,10 +1099,8 @@ async function cmdTrack(subcommand: string, parent?: string) {
       setParentBranch(childBranch, parentBranch);
     }
   } else {
-    logError(
-      `Unknown subcommand for track: ${subcommand}. Use 'set' or 'remove'.`
-    );
-    printHelp();
+    logError(`A sub-command is required for 'track'.`);
+    logInfo("Usage: gss track <set|remove> [options]");
     process.exit(1);
   }
 }
@@ -1195,19 +1261,23 @@ Housekeeping:
 
 // --- Main Execution ---
 async function main() {
-  const gitRoot = getGitRoot();
-  if (!gitRoot) {
+  const root = await getGitRoot();
+
+  if (!root) {
     logError(
       "Not a git repository. Please run gss from within a git repository."
     );
     process.exit(1);
   }
+
+  gitRoot = root;
   stateFile = path.join(gitRoot, ".git", "GSS_OPERATION_STATE");
   configCacheFile = path.join(gitRoot, ".git", "GSS_CONFIG_CACHE");
 
   let args = process.argv.slice(2);
 
   const yesFlagIndex = args.findIndex((arg) => arg === "-y" || arg === "--yes");
+
   if (yesFlagIndex !== -1) {
     autoConfirm = true;
     args.splice(yesFlagIndex, 1);

@@ -6,9 +6,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
     "outDir": "./dist"
   },
-  "include": [
-    "gss.ts"
-  ]
+  "include": ["gss.ts"]
 }
