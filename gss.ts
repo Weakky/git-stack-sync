@@ -146,11 +146,13 @@ async function unsetParentBranch(childBranch: string) {
   }
 }
 
-async function getPrNumber(branch: string): Promise<string> {
+async function getPrNumber(branch: string): Promise<number | null> {
   try {
-    return (await $`git config --get branch.${branch}.pr-number`).stdout.trim();
+    const prNumberString = (await $`git config --get branch.${branch}.pr-number`).stdout.trim();
+
+    return Number(prNumberString)
   } catch {
-    return '';
+    return null
   }
 }
 
@@ -409,6 +411,18 @@ async function cmdSubmit() {
   logSuccess("Stack submission complete.");
 }
 
+type PrState = {
+  state: 'MERGED' | 'CLOSED' | 'OPEN'
+}
+
+async function fetchPrState(prNumber: number): Promise<PrState> {
+  const json = (await $`gh pr view ${prNumber} --json state`).stdout;
+  console.log({ json })
+  const parsed = JSON.parse(json);
+
+  return parsed as PrState
+}
+
 async function cmdSync() {
   await guardContext('sync');
   await checkGhAuth();
@@ -433,8 +447,8 @@ async function cmdSync() {
     const prNumber = await getPrNumber(branch);
     if (prNumber) {
       logInfo(`Checking status of PR #${prNumber} for branch '${branch}'...`);
-      const prState = JSON.parse((await $`gh pr view ${prNumber} --json state`).stdout).state;
-      if (prState === 'MERGED') {
+      const prState = await fetchPrState(prNumber);
+      if (prState.state === 'MERGED') {
         isMerged = true;
       }
     }
@@ -574,29 +588,56 @@ async function cmdList() {
 async function cmdStatus() {
   await guardContext('status');
   await checkGhAuth();
+
   logStep("Gathering stack status...");
   await $`git fetch origin --quiet`;
 
   const stack = await getFullStack();
 
+  if (stack.length === 0) {
+    logWarning("Not currently in a stack. Nothing to show.");
+    logSuggestion(`Run 'gss create <branch-name>' to start a new stack.`);
+    return;
+  }
+
+  console.log(""); // Formatting
+
+  // Display base branch status
+  const baseBehind = parseInt((await $`git rev-list --count ${config.baseBranch}..origin/${config.baseBranch}`).stdout);
+  const baseAhead = parseInt((await $`git rev-list --count origin/${config.baseBranch}..${config.baseBranch}`).stdout);
+  let baseStatus = "🟢 Up to date with origin";
+  if (baseBehind > 0) {
+    baseStatus = `🟡 Behind by ${baseBehind}`;
+  } else if (baseAhead > 0) {
+    baseStatus = `🟡 Ahead by ${baseAhead}`;
+  }
+  console.log(`➡️  ${config.baseBranch} (${baseStatus})`);
   console.log("");
-  let needsSync = false;
-  let needsPush = false;
-  let needsRestack = false;
+
+  let stackNeedsPush = false;
+  let stackNeedsRestack = false;
+  let stackIsOutOfSyncWithBase = false;
+  let stackNeedsSubmit = false;
+  let stackHasMergedBranches = false;
+  const currentBranch = await getCurrentBranch();
 
   for (const branch of stack) {
-    const parent = await getParentBranch(branch) || config.baseBranch;
-    const isCurrent = (await getCurrentBranch()) === branch ? ' *' : '';
-    console.log(`➡️  ${branch}${isCurrent} (parent: ${parent})`);
+    const parentBranch = await getParentBranch(branch) || config.baseBranch;
+    const isCurrentBranch = currentBranch === branch ? " *" : "";
+    console.log(`➡️  ${branch}${isCurrentBranch} (parent: ${parentBranch})`);
 
-    // Status
-    let statusMessage = '';
-    try {
-      await $`git merge-base --is-ancestor ${parent} ${branch}`;
-    } catch {
-      statusMessage = chalk.yellow(`Behind '${parent}'`);
-      if (parent === config.baseBranch) needsSync = true;
-      else needsRestack = true;
+    // --- Status Line ---
+    let statusMessage = "";
+    const parentForComparison = parentBranch === config.baseBranch ? config.baseBranch : parentBranch;
+
+    const commitsBehindParent = parseInt((await $`git rev-list --count ${branch}..${parentForComparison}`).stdout);
+    if (commitsBehindParent > 0) {
+      statusMessage = `🟡 Behind '${parentBranch}' (${commitsBehindParent} commits)`;
+      if (parentBranch === config.baseBranch) {
+        stackIsOutOfSyncWithBase = true;
+      } else {
+        stackNeedsRestack = true;
+      }
     }
 
     if (!statusMessage) {
@@ -604,46 +645,62 @@ async function cmdStatus() {
         const remoteSha = (await $`git rev-parse --quiet --verify origin/${branch}`).stdout.trim();
         const localSha = (await $`git rev-parse ${branch}`).stdout.trim();
         if (remoteSha && localSha !== remoteSha) {
-          statusMessage = chalk.yellow('Needs push');
-          needsPush = true;
-        } else {
-          statusMessage = chalk.green('Synced');
+          statusMessage = "🟡 Needs push (local history has changed)";
+          stackNeedsPush = true;
         }
       } catch {
-        statusMessage = 'Not on remote';
-        needsPush = true;
+        statusMessage = "⚪ Not on remote";
+        stackNeedsPush = true;
       }
+    }
+
+    if (!statusMessage) {
+      statusMessage = "🟢 Synced";
     }
     console.log(`   ├─ Status: ${statusMessage}`);
 
-    // PR Status
+    // --- PR Line ---
     const prNumber = await getPrNumber(branch);
-    let prStatus = '';
+    let prStatus = "";
     if (prNumber) {
       try {
-        const prInfo = JSON.parse((await $`gh pr view ${prNumber} --json state,url`).stdout);
-        switch (prInfo.state) {
-          case 'OPEN': prStatus = chalk.green(`🟢 #${prNumber}: OPEN`); break;
-          case 'MERGED': prStatus = chalk.magenta(`🟣 #${prNumber}: MERGED`); needsSync = true; break;
-          case 'CLOSED': prStatus = chalk.red(`🔴 #${prNumber}: CLOSED`); break;
+        const { stdout } = await $`gh pr view ${prNumber} --json state,url`;
+        const prInfo = JSON.parse(stdout);
+
+        if (prInfo.state === 'OPEN') {
+          prStatus = `🟢 #${prNumber}: OPEN - ${prInfo.url}`;
+        } else if (prInfo.state === 'MERGED') {
+          prStatus = `🟣 #${prNumber}: MERGED`;
+          stackHasMergedBranches = true;
+        } else if (prInfo.state === 'CLOSED') {
+          prStatus = `🔴 #${prNumber}: CLOSED`;
         }
       } catch {
-        prStatus = chalk.yellow(`🟡 Could not fetch status for PR #${prNumber}`);
+        prStatus = `🟡 Could not fetch status for PR #${prNumber}`;
       }
     } else {
-      prStatus = '⚪ No PR submitted';
+      prStatus = "⚪ No PR submitted";
+      stackNeedsSubmit = true;
     }
-    console.log(`   └─ PR:     ${prStatus}\n`);
+    console.log(`   └─ PR:     ${prStatus}`);
+    console.log("");
   }
 
-  if (needsSync) {
+  // --- Final Summary ---
+  if (stackHasMergedBranches || baseBehind > 0 || stackIsOutOfSyncWithBase) {
+    logWarning("The stack contains merged branches or is behind the base branch.");
     logSuggestion("Run 'gss sync' to update the base and rebase the stack.");
-  } else if (needsRestack) {
-    logSuggestion("Run 'gss restack' from the out-of-date branch.");
-  } else if (needsPush) {
+  } else if (stackNeedsRestack) {
+    logWarning("A branch in the stack is behind its parent.");
+    logSuggestion("Run 'gss restack' from the out-of-date branch or 'gss sync' for the whole stack.");
+  } else if (stackNeedsPush) {
+    logWarning("One or more local branches have changed.");
     logSuggestion("Run 'gss push' to update the remote.");
+  } else if (stackNeedsSubmit) {
+    logWarning("One or more branches are missing a pull request.");
+    logSuggestion("Run 'gss submit' to create them.");
   } else {
-    logSuccess("Stack is up to date.");
+    logSuccess(`Stack is up to date with '${config.baseBranch}' and remote.`);
   }
 }
 
