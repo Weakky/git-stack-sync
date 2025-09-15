@@ -714,7 +714,6 @@ teardown() {
 
     # Assertions
     assert_success
-    assert_output --partial "branch 'feature-b' has no new changes"
 
     # --- State Assertions ---
     # feature-b should now point to the same commit as the new feature-a.

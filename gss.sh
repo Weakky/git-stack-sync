@@ -235,78 +235,18 @@ gh_api_call() {
         "${fields[@]}"
 }
 
-# Internal function to perform the core rebase loop and handle conflicts.
-# This function is now responsible for saving the state of the operation.
-_perform_iterative_rebase() {
-    # State parameters
-    local command=$1
-    local original_branch=$2
-    local merged_branches_to_delete=$3
-    
-    # Rebase parameters
-    local rebase_target=$4
-    local parent_to_record=$5 # The "clean" name to save in the config
-    shift 5
-    local branches_to_rebase=("$@")
+# New helper function to repair metadata after a successful --update-refs rebase.
+_repair_stack_metadata() {
+    local current_parent=$1
+    shift
+    local branches=("$@")
 
-    # Save the initial state BEFORE starting the potentially failing operation.
-    echo "COMMAND='$command'" > "$STATE_FILE"
-    echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
-    echo "MERGED_BRANCHES_TO_DELETE='$merged_branches_to_delete'" >> "$STATE_FILE"
-    echo "REMAINING_BRANCHES_TO_REBASE='${branches_to_rebase[*]}'" >> "$STATE_FILE"
-    echo "LAST_SUCCESSFUL_REBASE_TARGET='$rebase_target'" >> "$STATE_FILE"
-    echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$parent_to_record'" >> "$STATE_FILE"
-
-    local current_rebase_target="$rebase_target"
-    local current_parent_to_record="$parent_to_record"
-    local remaining_branches=("${branches_to_rebase[@]}")
-
-    for branch in "${branches_to_rebase[@]}"; do
-        log_step "Rebasing '$branch' onto '$current_rebase_target'..."
-        git checkout "$branch" >/dev/null 2>&1
-        local old_base
-        old_base=$(get_parent_branch "$branch")
-        if [[ -z "$old_base" ]]; then
-            log_error "Could not determine parent of '$branch' for rebase. Aborting."
-            exit 1
-        fi
-
-        if ! git rebase --onto "$current_rebase_target" "$old_base" "$branch"; then
-            echo ""
-            log_error "Rebase conflict detected while rebasing '$branch'."
-            log_info "Please follow these steps to resolve:"
-            log_info "1. Open the conflicting files and resolve the issues."
-            log_info "2. Run 'git add <resolved-files>'."
-            log_info "3. Run 'git rebase --continue'."
-            log_info "4. Once the git rebase process is fully complete, run 'gss continue'."
-            exit 1
-        fi
-        
-        # --- On successful rebase, update the state file ---
-        set_parent_branch "$branch" "$current_parent_to_record"
-        
-        current_rebase_target="$branch"
-        current_parent_to_record="$branch" # For subsequent branches, the parent is the branch itself.
-        remaining_branches=("${remaining_branches[@]:1}") # Pop the first element
-        
-        echo "LAST_SUCCESSFUL_REBASE_TARGET='$current_rebase_target'" >> "$STATE_FILE"
-        echo "LAST_SUCCESSFUL_PARENT_TO_RECORD='$current_parent_to_record'" >> "$STATE_FILE"
-        echo "REMAINING_BRANCHES_TO_REBASE='${remaining_branches[*]}'" >> "$STATE_FILE"
-
-
-        # Check if the rebase resulted in an empty branch and warn the user.
-        local commit_count
-        commit_count=$(git rev-list --count "${current_parent_to_record}".."${branch}")
-        if [[ "$commit_count" -eq 0 ]]; then
-            local pr_number_to_check
-            pr_number_to_check=$(get_pr_number "$branch")
-            log_warning "After rebasing, branch '$branch' has no new changes compared to '$current_parent_to_record'."
-            if [[ -n "$pr_number_to_check" ]]; then
-                log_info "This can happen if changes from this branch were also introduced into its parent."
-                log_info "Pushing this update may cause GitHub to automatically close PR #${pr_number_to_check}."
-            fi
-        fi
+    log_step "Updating gss parent metadata..."
+    for branch in "${branches[@]}"; do
+        set_parent_branch "$branch" "$current_parent"
+        current_parent="$branch"
     done
+    log_success "Metadata repaired."
 }
 
 # Internal helper to handle the complex logic of reparenting, rebasing a sub-stack, and updating PRs.
@@ -926,10 +866,32 @@ cmd_restack() {
         return
     fi
     
+    local top_branch="${branches_to_restack[${#branches_to_restack[@]}-1]}"
     log_info "Detected subsequent stack: ${branches_to_restack[*]}"
-    _perform_iterative_rebase "restack" "$original_branch" "" "$original_branch" "$original_branch" "${branches_to_restack[@]}"
-    
-    _finish_operation
+    log_step "Restacking descendant branches onto '$original_branch' with --update-refs..."
+
+    # Check out the top branch of the stack segment we intend to rebase.
+    git checkout "$top_branch" >/dev/null 2>&1
+
+    # The <old-base> and <new-base> are the same: the branch we started on.
+    # This tells git to re-apply all commits between `original_branch..top_branch`
+    # on top of the *new* version of `original_branch`.
+    if git rebase --update-refs --onto "$original_branch" "$original_branch" "$top_branch"; then
+        log_success "Restack complete."
+        # Create a minimal state file so _finish_operation can return to the original branch.
+        echo "COMMAND='restack'" > "$STATE_FILE"
+        echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
+        _finish_operation
+    else
+        log_error "Rebase conflict detected. Git has paused the rebase."
+        log_info "Please resolve the conflicts and run 'git rebase --continue'."
+        log_suggestion "Once the git rebase is complete, run 'gss continue' to finalize."
+
+        # Save state for `gss continue`. Metadata repair is not needed for restack.
+        echo "COMMAND='restack'" > "$STATE_FILE"
+        echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
+        exit 1
+    fi
 }
 
 cmd_continue() {
@@ -947,57 +909,16 @@ cmd_continue() {
     # shellcheck source=/dev/null
     source "$STATE_FILE"
 
-    local remaining_branches_array=($REMAINING_BRANCHES_TO_REBASE)
-    if [[ ${#remaining_branches_array[@]} -gt 0 ]]; then
-        log_step "Resuming '$COMMAND' operation..."
-        
-        local conflicted_branch="${remaining_branches_array[0]}"
+    log_step "Resuming '$COMMAND' operation..."
 
-        # --- Abort Detection ---
-        # If the conflicted branch's history does NOT contain the last successful base,
-        # it means the user must have aborted the rebase.
-        if ! git merge-base --is-ancestor "$LAST_SUCCESSFUL_REBASE_TARGET" "$conflicted_branch"; then
-            log_warning "Rebase for '$conflicted_branch' was not completed."
-            log_info "It appears 'git rebase --abort' may have been run."
-            
-            if [[ "$AUTO_CONFIRM" != true ]]; then
-                log_prompt "Do you want to cancel the entire '$COMMAND' operation?"
-                read -p "(y/N) " -n 1 -r
-                echo
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                    log_error "Cannot continue. The stack is in an inconsistent state."
-                    log_suggestion "Please fix the history of '$conflicted_branch' or run 'gss clean' to reset all metadata."
-                    exit 1
-                fi
-            fi
-
-            log_info "Cancelling operation and cleaning up state."
-            rm -f "$STATE_FILE"
-            exit 0
-        fi
-
-        # --- Normal Continuation ---
-        # The first branch in the list is the one that was just manually fixed.
-        local just_completed_branch="${remaining_branches_array[0]}"
-
-        # The rebase succeeded, so we must update its parent metadata.
-        log_info "Updating metadata for resolved branch '$just_completed_branch'..."
-        set_parent_branch "$just_completed_branch" "$LAST_SUCCESSFUL_PARENT_TO_RECORD"
-
-        # The new base for the rest of the stack is the branch we just fixed.
-        local new_rebase_target="$just_completed_branch"
-        local new_parent_to_record="$just_completed_branch"
-        
-        # The new list of branches to rebase is the rest of the array (the tail).
-        local branches_to_resume=("${remaining_branches_array[@]:1}")
-
-        # If there's more work to do, call the rebase function again with the smaller list.
-        if [[ ${#branches_to_resume[@]} -gt 0 ]]; then
-            _perform_iterative_rebase "$COMMAND" "$ORIGINAL_BRANCH" "$MERGED_BRANCHES_TO_DELETE" "$new_rebase_target" "$new_parent_to_record" "${branches_to_resume[@]}"
-        fi
+    if [[ "$COMMAND" == "sync" ]]; then
+        # The git rebase is finished, now we fix the gss metadata.
+        local unmerged_branches_array=($UNMERGED_BRANCHES)
+        _repair_stack_metadata "$FINAL_BASE" "${unmerged_branches_array[@]}"
     fi
 
-    # Whether we had more work or not, the operation is now ready to be finalized.
+    # For both 'sync' and 'restack', the final step is to clean up merged branches
+    # and return the user to their original branch.
     _finish_operation
 }
 
@@ -1074,14 +995,44 @@ cmd_sync() {
 
     # Rebase the remaining (unmerged) stack
     if [ ${#unmerged_branches[@]} -gt 0 ]; then
-        log_step "Rebasing remaining stack onto '$BASE_BRANCH'..."
+        log_step "Rebasing remaining stack onto '$BASE_BRANCH' with --update-refs..."
         
+        local top_branch="${unmerged_branches[${#unmerged_branches[@]}-1]}"
+        local bottom_branch="${unmerged_branches[0]}"
+        local old_base
+        old_base=$(get_parent_branch "$bottom_branch")
+        if [[ -z "$old_base" ]]; then
+            log_error "Could not determine the original base of the stack (parent of '$bottom_branch'). Aborting."
+            exit 1
+        fi
         local new_base="origin/$BASE_BRANCH"
-        
-        _perform_iterative_rebase "sync" "$original_branch" "${merged_branches[*]}" "$new_base" "$BASE_BRANCH" "${unmerged_branches[@]}"
-        
-        _finish_operation
 
+        # Check out the top of the stack to ensure the rebase command has the correct context.
+        git checkout "$top_branch" >/dev/null 2>&1
+
+        if git rebase --update-refs --onto "$new_base" "$old_base" "$top_branch"; then
+            log_success "Stack rebased successfully."
+            _repair_stack_metadata "${BASE_BRANCH}" "${unmerged_branches[@]}"
+            
+            # Create a state file and call _finish_operation to handle merged branch deletion.
+            echo "COMMAND='sync'" > "$STATE_FILE"
+            echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
+            echo "MERGED_BRANCHES_TO_DELETE='${merged_branches[*]}'" >> "$STATE_FILE"
+            _finish_operation
+        else
+            log_error "Rebase conflict detected. Git has paused the rebase."
+            log_info "Please resolve the conflicts and run 'git rebase --continue'."
+            log_suggestion "Once the git rebase is complete, run 'gss continue' to finalize."
+
+            # Save state for `gss continue`
+            echo "COMMAND='sync'" > "$STATE_FILE"
+            echo "ORIGINAL_BRANCH='$original_branch'" >> "$STATE_FILE"
+            echo "MERGED_BRANCHES_TO_DELETE='${merged_branches[*]}'" >> "$STATE_FILE"
+            echo "UNMERGED_BRANCHES='${unmerged_branches[*]}'" >> "$STATE_FILE"
+            echo "FINAL_BASE='${BASE_BRANCH}'" >> "$STATE_FILE"
+            exit 1
+        fi
+        
     else
         log_warning "All branches in the stack were merged. Nothing left to rebase."
         # Still need to create the state file so finish_operation can clean up.
@@ -1461,3 +1412,4 @@ main() {
 }
 
 main "$@"
+
