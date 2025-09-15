@@ -7,7 +7,8 @@ It works by maintaining a simple set of metadata in your local Git configuration
 ### What does it shine at?
 
   * **Simplicity**: It's a single, dependency-light Bash script. There's no complex installation or background daemon.
-  * **Automation**: It automates the most tedious parts of stacked branching, such as rebasing an entire stack of branches (`sync`) or updating children after an amendment (`restack`).
+  * **Efficiency**: It leverages modern Git features like `git rebase --update-refs` to perform complex stack rebases in a single, fast operation.
+  * **Automation**: It automates the most tedious parts of stacked branching, such as rebasing an entire stack of branches (`sync`) or intelligently updating children after an amendment (`restack`).
   * **GitHub Integration**: It seamlessly uses the `gh` CLI to manage pull requests for your entire stack, creating dependencies and updating them as you restructure your branches.
   * **Clarity**: The `status` command gives you a comprehensive overview of your entire stack, showing which branches are out of sync, need pushing, or have merged pull requests.
 
@@ -21,7 +22,7 @@ This simple parent-child metadata is the foundation for all of `gss`'s powerful 
 
 1.  **Dependencies**: Make sure you have the following tools installed and available in your `$PATH`:
 
-      * `git` (version 2.38+ recommended)
+      * `git` (version **2.39+ required** for `--update-refs` support)
       * [GitHub CLI (`gh`)](https://www.google.com/search?q=%5Bhttps://cli.github.com/%5D\(https://cli.github.com/\))
       * [jq](https://stedolan.github.io/jq/)
 
@@ -94,15 +95,15 @@ Here is a detailed list of all available commands.
     2.  Updates your local base branch (e.g., `main`) to match the remote.
     3.  Checks the status of the pull request for every branch in your stack.
     4.  If any PRs have been **merged**, it automatically removes those branches from the stack, re-parents their children, and prepares for cleanup.
-    5.  Rebases the remaining, unmerged branches onto the latest version of the base branch.
+    5.  Rebases the remaining, unmerged branches onto the latest version of the base branch in a single, efficient operation using `git rebase --update-refs`.
 
   * #### `gss restack`
 
-    Updates all descendant (child) branches after you've modified the current branch's history (e.g., with `git commit --amend` or `git rebase`). It performs a cascading rebase on all children.
+    Intelligently updates your stack after you've modified its history (e.g., with `git commit --amend` or an interactive rebase). It automatically detects the first branch that has diverged from its parent and rebases all of its descendants on top of it. You can run `restack` from anywhere in the stack.
 
   * #### `gss amend`
 
-    A convenient shortcut. It adds all staged changes to the most recent commit (`git commit --amend --no-edit`) and then automatically runs `gss restack` if the current branch has children.
+    A convenient shortcut. It adds all staged changes to the most recent commit (`git commit --amend --no-edit`) and then automatically runs `gss restack` to update any descendant branches.
 
   * #### `gss push`
 
@@ -135,7 +136,7 @@ Here is a detailed list of all available commands.
 
   * #### `gss submit`
 
-    Creates GitHub pull requests for all branches in the stack that don't have one yet. It automatically sets the base branch for each PR to be its parent in the stack, creating a dependent chain of PRs.
+    Creates GitHub pull requests for all branches in the stack that don't have one yet. It automatically sets the base branch for each PR to be its parent in the stack, creating a dependent chain of PRs. It will output the URL for each PR created.
 
   * #### `gss pr`
 
@@ -161,15 +162,12 @@ gss create feat-part-2
 echo "More work" > file2.txt
 git add . && git commit -m "feat: Implement part 2"
 
-# 4. Push the entire stack to the remote
-gss push --yes
-
-# 5. Create pull requests for the entire stack
+# 4. Create pull requests for the entire stack
 gss submit
 # ➡️  Creating PR for 'feat-part-1'...
-# 🟢 Created PR #101 for 'feat-part-1'.
+# 🟢 Created PR #101 for 'feat-part-1': https://github.com/user/repo/pull/101
 # ➡️  Creating PR for 'feat-part-2'...
-# 🟢 Created PR #102 for 'feat-part-2'.
+# 🟢 Created PR #102 for 'feat-part-2': https://github.com/user/repo/pull/102
 # 🟢 Stack submission complete.
 ```
 
@@ -196,14 +194,14 @@ gss status
 #    └─ PR:     🟢 #102: OPEN
 #
 # 🟡 Warning: The stack contains merged branches or is behind the base branch.
-# 💡 Next step: Run 'gss sync' to clean up and rebase the stack.
+# 💡 Next step: Run 'gss sync' to update the base and rebase the stack.
 
 # 2. Run `sync` to automatically fix everything.
 gss sync --yes
 # ➡️  Syncing stack with 'main' and checking for merged branches...
 # 🟢 Branch 'feat-part-1' has been merged.
-# ➡️  Rebasing remaining stack onto 'main'...
-# ➡️  Rebasing 'feat-part-2' onto 'origin/main'...
+# ➡️  Rebasing remaining stack onto 'main' with --update-refs...
+# 🟢 Stack rebased successfully.
 # ➡️  Finishing operation...
 # 🟢 Deleted local branch 'feat-part-1'.
 # 🟢 Operation complete.
@@ -225,7 +223,7 @@ gss push --yes
 
 Your stack is now clean, up-to-date, and consists of a single branch (`feat-part-2`) based on `main`.
 
-### 3\. Amending a Commit in a Stack (`restack`)
+### 3\. Amending a Commit in a Stack (`amend`)
 
 Imagine you need to fix something in `feat-part-1` while `feat-part-2` already depends on it.
 
@@ -234,18 +232,19 @@ Imagine you need to fix something in `feat-part-1` while `feat-part-2` already d
 #    Check out the branch you need to edit.
 git checkout feat-part-1
 
-# 2. Make your changes and amend them to the last commit.
+# 2. Make your changes and stage them.
 echo "a fix" >> file1.txt
 git add file1.txt
-git commit --amend --no-edit
-# Alternatively, you can just run `gss amend` after adding the file.
 
-# 3. Your commit hash for `feat-part-1` has now changed, making
-#    `feat-part-2` out of date. Run `restack`.
-gss restack
-# ➡️  Restacking branches on top of 'feat-part-1'...
-#    Detected subsequent stack: feat-part-2
-# ➡️  Rebasing 'feat-part-2' onto 'feat-part-1'...
+# 3. Run `gss amend`. It will amend the commit and automatically restack
+#    any descendant branches (`feat-part-2`) for you.
+gss amend --yes
+# ➡️  Amending changes to the last commit on 'feat-part-1'...
+# 🟢 Commit amended successfully.
+# ➡️  Checking stack integrity to find point of divergence...
+# 🟡 Warning: Detected stack divergence at 'feat-part-1'. Restacking descendants...
+#    Will restack the following branches: feat-part-2
+# 🟢 Restack complete.
 # ➡️  Finishing operation...
 # 🟢 Operation complete.
 
