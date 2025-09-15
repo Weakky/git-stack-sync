@@ -479,11 +479,30 @@ async function cmdSync() {
 
   logInfo(`Updating local base branch '${config.baseBranch}'...`);
   await $`git checkout ${config.baseBranch}`;
-  await $`git pull --ff-only origin ${config.baseBranch}`;
+  try {
+    await $`git pull --ff-only origin ${config.baseBranch}`;
+  } catch {
+    logError(
+      `Your local base branch ('${config.baseBranch}') has diverged from the remote.`
+    );
+    logInfo(
+      "Please resolve this before running sync. A common cause is having local commits on '${config.baseBranch}'."
+    );
+    logSuggestion(
+      `Consider running 'git checkout ${config.baseBranch} && git reset --hard origin/${config.baseBranch}'.`
+    );
+    await $`git checkout ${originalBranch}`;
+    process.exit(1);
+  }
   logSuccess("Local base branch is up to date.");
   await $`git checkout ${originalBranch}`;
 
   const stack = await getFullStack();
+  if (stack.length === 0) {
+    logWarning("Could not determine stack. Nothing to sync.");
+    return;
+  }
+
   const mergedBranches: string[] = [];
   const unmergedBranches: string[] = [];
 
@@ -504,7 +523,7 @@ async function cmdSync() {
         await $`git merge-base --is-ancestor ${branch} origin/${config.baseBranch}`;
         isMerged = true;
       } catch {
-        // not an ancestor
+        // not an ancestor, so not merged
       }
     }
 
@@ -522,7 +541,13 @@ async function cmdSync() {
     );
     const topBranch = unmergedBranches[unmergedBranches.length - 1];
     const bottomBranch = unmergedBranches[0];
-    const oldBase = (await getParentBranch(bottomBranch)) || config.baseBranch;
+    const oldBase = await getParentBranch(bottomBranch);
+    if (!oldBase) {
+      logError(
+        `Could not determine the original base of the stack (parent of '${bottomBranch}'). Aborting.`
+      );
+      process.exit(1);
+    }
 
     await $`git checkout ${topBranch}`;
 
@@ -533,9 +558,9 @@ async function cmdSync() {
       unmergedBranches,
       finalBase: config.baseBranch,
     };
-    await writeState(state);
 
     try {
+      await writeState(state);
       await $`git rebase --update-refs --onto origin/${config.baseBranch} ${oldBase} ${topBranch}`;
       logSuccess("Stack rebased successfully.");
       await repairStackMetadata(config.baseBranch, unmergedBranches);
@@ -1022,27 +1047,54 @@ async function cmdInsert(
     logError("Branch name is required for insert.");
     process.exit(1);
   }
+  await checkGhAuth();
   await guardContext("insert");
   await guardDirtyState();
 
   const currentBranch = await getCurrentBranch();
-  const parent = await getParentBranch(currentBranch);
+  let insertionPoint: string;
+  let childToReparent: string | undefined;
 
-  const insertionPoint = before ? parent : currentBranch;
-  const childToReparent = before
-    ? currentBranch
-    : (await getChildBranches(currentBranch))[0];
+  if (before) {
+    insertionPoint = await getParentBranch(currentBranch);
+    if (!insertionPoint) {
+      logError(
+        `Cannot determine parent of '${currentBranch}'. Is it part of a stack?`
+      );
+      process.exit(1);
+    }
+    childToReparent = currentBranch;
+    logStep(`Preparing to insert '${branchName}' before '${currentBranch}'...`);
+  } else {
+    insertionPoint = currentBranch;
+    childToReparent = (await getChildBranches(currentBranch))[0];
+    logStep(`Preparing to insert '${branchName}' after '${currentBranch}'...`);
+  }
 
   await $`git checkout -b ${branchName} ${insertionPoint}`;
   await setParentBranch(branchName, insertionPoint);
   logSuccess(`Created branch '${branchName}' on top of '${insertionPoint}'.`);
 
   if (childToReparent) {
-    logStep(`Re-parenting and rebasing descendants of '${childToReparent}'...`);
+    const prNumber = await getPrNumber(childToReparent);
+    if (prNumber) {
+      logStep(`Updating GitHub PR for '${childToReparent}'...`);
+      logInfo(`Pushing new branch '${branchName}' to remote...`);
+      await $`git push origin ${branchName}`;
+      logInfo(`Setting base of PR #${prNumber} to '${branchName}'...`);
+      await $`gh api repos/${config.ghUser}/${config.ghRepo}/pulls/${prNumber} --method PATCH -f base=${branchName}`;
+      logSuccess(`GitHub PR #${prNumber} updated.`);
+    }
+
+    logInfo(`Re-parenting '${childToReparent}' to '${branchName}'.`);
     await setParentBranch(childToReparent, branchName);
+    // We now call restack, which will see the metadata divergence and fix the local branches
     await cmdRestack();
   }
+
   await $`git checkout ${branchName}`;
+  logSuccess(`Successfully inserted '${branchName}' into the stack.`);
+  logSuggestion("Add commits, then run 'gss submit' to create a PR.");
 }
 
 async function cmdSquash({ into }: { into?: "parent" | "child" } = {}) {
