@@ -612,7 +612,7 @@ teardown() {
 
     # Assertions
     assert_success
-    assert_output --partial "You are at the top of the stack. Nothing to restack."
+    assert_output --partial "Stack is internally consistent. Nothing to restack."
 
     # --- State Assertions ---
     # Hashes should not have changed.
