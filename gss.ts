@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { $, chalk, fs, path, ProcessOutput, question } from 'zx';
+import { $, chalk, fs, path, ProcessOutput, question } from "zx";
 
 $.verbose = false;
 
@@ -15,16 +15,15 @@ interface GssState {
   finalBase?: string;
 }
 
-
 // --- State and Configuration ---
 let stateFile: string;
 let configCacheFile: string;
 let autoConfirm = false;
 
 const config = {
-  baseBranch: '',
-  ghUser: '',
-  ghRepo: '',
+  baseBranch: "",
+  ghUser: "",
+  ghRepo: "",
 };
 
 // --- Logging Helpers ---
@@ -55,7 +54,10 @@ function logSuggestion(message: string) {
 // --- Git & System Helpers ---
 function getGitRoot(): string | null {
   try {
-    return require('child_process').execSync('git rev-parse --show-toplevel').toString().trim();
+    return require("child_process")
+      .execSync("git rev-parse --show-toplevel")
+      .toString()
+      .trim();
   } catch (e) {
     return null;
   }
@@ -65,11 +67,18 @@ async function guardDirtyState(options: { allowStaged?: boolean } = {}) {
   let status = (await $`git status --porcelain`).stdout.trim();
   if (options.allowStaged) {
     // Filter out staged changes (lines starting with A, M, D, R, C followed by a space)
-    status = status.split('\n').filter(line => !/^[AMDRC] /.test(line)).join('\n');
+    status = status
+      .split("\n")
+      .filter((line) => !/^[AMDRC] /.test(line))
+      .join("\n");
   }
   if (status) {
-    logError('Command cannot run with uncommitted changes in the working directory.');
-    logSuggestion("Please 'git commit' or 'git stash' your changes before proceeding.");
+    logError(
+      "Command cannot run with uncommitted changes in the working directory."
+    );
+    logSuggestion(
+      "Please 'git commit' or 'git stash' your changes before proceeding."
+    );
     process.exit(1);
   }
 }
@@ -84,7 +93,6 @@ async function checkGhAuth() {
   }
 }
 
-
 async function getCurrentBranch(): Promise<string> {
   return (await $`git rev-parse --abbrev-ref HEAD`).stdout.trim();
 }
@@ -93,16 +101,19 @@ async function getParentBranch(branch: string): Promise<string> {
   try {
     return (await $`git config --get branch.${branch}.parent`).stdout.trim();
   } catch {
-    return '';
+    return "";
   }
 }
 
 async function getChildBranches(parentBranch: string): Promise<string[]> {
   try {
-    const configLines = (await $`git config --get-regexp ^branch\\..*\\.parent$`).stdout.trim();
-    return configLines.split('\n')
-      .filter(line => line.endsWith(` ${parentBranch}`))
-      .map(line => line.match(/^branch\.(.*)\.parent/)?.[1] || '')
+    const configLines = (
+      await $`git config --get-regexp ^branch\\..*\\.parent$`
+    ).stdout.trim();
+    return configLines
+      .split("\n")
+      .filter((line) => line.endsWith(` ${parentBranch}`))
+      .map((line) => line.match(/^branch\.(.*)\.parent/)?.[1] || "")
       .filter(Boolean);
   } catch {
     return [];
@@ -110,7 +121,7 @@ async function getChildBranches(parentBranch: string): Promise<string[]> {
 }
 
 async function getStackTop(startBranch?: string): Promise<string> {
-  let currentTop = startBranch || await getCurrentBranch();
+  let currentTop = startBranch || (await getCurrentBranch());
   while (true) {
     // In a forked stack, this will just pick the first child it finds.
     const children = await getChildBranches(currentTop);
@@ -148,11 +159,13 @@ async function unsetParentBranch(childBranch: string) {
 
 async function getPrNumber(branch: string): Promise<number | null> {
   try {
-    const prNumberString = (await $`git config --get branch.${branch}.pr-number`).stdout.trim();
+    const prNumberString = (
+      await $`git config --get branch.${branch}.pr-number`
+    ).stdout.trim();
 
-    return Number(prNumberString)
+    return Number(prNumberString);
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -163,13 +176,15 @@ async function setPrNumber(branch: string, prNumber: string) {
 async function confirm(prompt: string): Promise<boolean> {
   if (autoConfirm) return true;
   const answer = await question(`❔ ${prompt} (y/N) `);
-  return answer.toLowerCase() === 'y';
+  return answer.toLowerCase() === "y";
 }
 
 async function guardContext(commandName: string) {
   const currentBranch = await getCurrentBranch();
   if (currentBranch === config.baseBranch) {
-    logError(`The '${commandName}' command cannot be run from the base branch ('${config.baseBranch}').`);
+    logError(
+      `The '${commandName}' command cannot be run from the base branch ('${config.baseBranch}').`
+    );
     await cmdList();
     process.exit(1);
   }
@@ -184,7 +199,7 @@ async function guardContext(commandName: string) {
 
 async function readState(): Promise<GssState | null> {
   try {
-    const content = await fs.readFile(stateFile, 'utf-8');
+    const content = await fs.readFile(stateFile, "utf-8");
     return JSON.parse(content) as GssState;
   } catch {
     return null;
@@ -213,17 +228,20 @@ async function repairStackMetadata(startParent: string, branches: string[]) {
   logSuccess("Metadata repaired.");
 }
 
-
 async function finishOperation() {
   const state = await readState();
   if (!state) return;
 
   logStep("Finishing operation...");
 
-  if (state.command === 'sync' && state.mergedBranchesToDelete) {
+  if (state.command === "sync" && state.mergedBranchesToDelete) {
     for (const branchToDelete of state.mergedBranchesToDelete) {
-      if (await confirm(`Do you want to delete the local merged branch '${branchToDelete}'?`)) {
-        if (await getCurrentBranch() === branchToDelete) {
+      if (
+        await confirm(
+          `Do you want to delete the local merged branch '${branchToDelete}'?`
+        )
+      ) {
+        if ((await getCurrentBranch()) === branchToDelete) {
           await $`git checkout ${config.baseBranch}`;
         }
         await $`git branch -D ${branchToDelete}`;
@@ -234,18 +252,20 @@ async function finishOperation() {
 
   try {
     await $`git rev-parse --verify ${state.originalBranch}`;
-    if (await getCurrentBranch() !== state.originalBranch) {
+    if ((await getCurrentBranch()) !== state.originalBranch) {
       logInfo(`Returning to original branch '${state.originalBranch}'.`);
       await $`git checkout ${state.originalBranch}`;
     }
   } catch {
-    logWarning(`Original branch '${state.originalBranch}' no longer exists. Returning to '${config.baseBranch}'.`);
+    logWarning(
+      `Original branch '${state.originalBranch}' no longer exists. Returning to '${config.baseBranch}'.`
+    );
     await $`git checkout ${config.baseBranch}`;
   }
 
   await clearState();
   logSuccess("Operation complete.");
-  if (state.command === 'sync' || state.command === 'restack') {
+  if (state.command === "sync" || state.command === "restack") {
     logSuggestion("Run 'gss push' to update your remote branches.");
   }
 }
@@ -253,7 +273,7 @@ async function finishOperation() {
 // --- Initialization ---
 async function initializeConfig() {
   try {
-    const cacheContent = await fs.readFile(configCacheFile, 'utf-8');
+    const cacheContent = await fs.readFile(configCacheFile, "utf-8");
     const cache = JSON.parse(cacheContent);
     if (cache.baseBranch && cache.ghUser && cache.ghRepo) {
       config.baseBranch = cache.baseBranch;
@@ -265,9 +285,10 @@ async function initializeConfig() {
     // Cache is invalid or doesn't exist, proceed to fetch
   }
 
-  logStep('Initializing configuration (first run or cache is invalid)...');
+  logStep("Initializing configuration (first run or cache is invalid)...");
   try {
-    const { stdout } = await $`gh repo view --json owner,name,defaultBranchRef --jq '{ "owner": .owner.login, "name": .name, "base": .defaultBranchRef.name }'`;
+    const { stdout } =
+      await $`gh repo view --json owner,name,defaultBranchRef --jq '{ "owner": .owner.login, "name": .name, "base": .defaultBranchRef.name }'`;
     const repoInfo = JSON.parse(stdout);
 
     if (!repoInfo.owner || !repoInfo.name || !repoInfo.base) {
@@ -284,10 +305,12 @@ async function initializeConfig() {
       ghRepo: config.ghRepo,
     };
     await fs.writeFile(configCacheFile, JSON.stringify(cachePayload, null, 2));
-    logSuccess('Configuration cached for future runs.');
+    logSuccess("Configuration cached for future runs.");
   } catch (error) {
-    logError('Could not determine GitHub repository context.');
-    logInfo("Please ensure you are inside a Git repository with a remote named 'origin' pointing to GitHub, and that you have run 'gh auth login'.");
+    logError("Could not determine GitHub repository context.");
+    logInfo(
+      "Please ensure you are inside a Git repository with a remote named 'origin' pointing to GitHub, and that you have run 'gh auth login'."
+    );
     process.exit(1);
   }
 }
@@ -296,8 +319,8 @@ async function initializeConfig() {
 
 async function cmdCreate(branchName?: string) {
   if (!branchName) {
-    logError('Branch name is required.');
-    logInfo('Usage: gss create <branch-name>');
+    logError("Branch name is required.");
+    logInfo("Usage: gss create <branch-name>");
     process.exit(1);
   }
 
@@ -307,21 +330,29 @@ async function cmdCreate(branchName?: string) {
     await $`git checkout -b ${branchName}`;
   } catch {
     await guardDirtyState(); // provide a better error message if checkout fails due to dirty state
-    logError(`Could not create branch '${branchName}'. It might already exist.`);
+    logError(
+      `Could not create branch '${branchName}'. It might already exist.`
+    );
     process.exit(1);
   }
 
   await setParentBranch(branchName, parentBranch);
-  logSuccess(`Created and checked out new branch '${branchName}' (parent: '${parentBranch}').`);
-  logSuggestion(`Add commits or run 'gss create <next-branch>' to extend the stack.`);
+  logSuccess(
+    `Created and checked out new branch '${branchName}' (parent: '${parentBranch}').`
+  );
+  logSuggestion(
+    `Add commits or run 'gss create <next-branch>' to extend the stack.`
+  );
 }
 
 async function cmdUp() {
-  await guardContext('up');
+  await guardContext("up");
   await guardDirtyState();
   const children = await getChildBranches(await getCurrentBranch());
   if (children.length > 1) {
-    logWarning("Fork detected. Multiple child branches found. Checking out the first one.");
+    logWarning(
+      "Fork detected. Multiple child branches found. Checking out the first one."
+    );
   }
   if (children.length > 0) {
     await $`git checkout ${children[0]}`;
@@ -332,7 +363,7 @@ async function cmdUp() {
 }
 
 async function cmdDown() {
-  await guardContext('down');
+  await guardContext("down");
   await guardDirtyState();
   const parent = await getParentBranch(await getCurrentBranch());
   if (parent) {
@@ -344,7 +375,7 @@ async function cmdDown() {
 }
 
 async function cmdPush() {
-  await guardContext('push');
+  await guardContext("push");
   await guardDirtyState();
   logStep("Collecting all branches in the stack...");
   const branchesToPush = (await getFullStack()).reverse();
@@ -355,7 +386,7 @@ async function cmdPush() {
   }
 
   console.log("Will force-push the following branches:");
-  branchesToPush.forEach(b => logInfo(b));
+  branchesToPush.forEach((b) => logInfo(b));
 
   if (await confirm("Are you sure?")) {
     logStep("Pushing with --force-with-lease...");
@@ -367,7 +398,7 @@ async function cmdPush() {
 }
 
 async function cmdSubmit() {
-  await guardContext('submit');
+  await guardContext("submit");
   await checkGhAuth();
   await guardDirtyState();
   logStep("Syncing stack with GitHub...");
@@ -381,24 +412,36 @@ async function cmdSubmit() {
       continue;
     }
 
-    const parent = await getParentBranch(branchName) || config.baseBranch;
-    const commitCount = parseInt((await $`git rev-list --count ${parent}..${branchName}`).stdout);
+    const parent = (await getParentBranch(branchName)) || config.baseBranch;
+    const commitCount = parseInt(
+      (await $`git rev-list --count ${parent}..${branchName}`).stdout
+    );
 
     if (commitCount === 0) {
-      logWarning(`Skipping PR for '${branchName}': No new commits compared to '${parent}'.`);
+      logWarning(
+        `Skipping PR for '${branchName}': No new commits compared to '${parent}'.`
+      );
       continue;
     }
 
     logStep(`Creating PR for '${branchName}'...`);
     await $`git push origin ${branchName} --force-with-lease`;
-    const prTitle = (await $`git log -1 --pretty=%s ${branchName}`).stdout.trim();
+    const prTitle = (
+      await $`git log -1 --pretty=%s ${branchName}`
+    ).stdout.trim();
 
     try {
-      const prResponse = JSON.parse((await $`gh api repos/${config.ghUser}/${config.ghRepo}/pulls --method POST -f title=${prTitle} -f head=${branchName} -f base=${parent}`).stdout);
+      const prResponse = JSON.parse(
+        (
+          await $`gh api repos/${config.ghUser}/${config.ghRepo}/pulls --method POST -f title=${prTitle} -f head=${branchName} -f base=${parent}`
+        ).stdout
+      );
 
       if (prResponse.number) {
         await setPrNumber(branchName, String(prResponse.number));
-        logSuccess(`Created PR #${prResponse.number} for '${branchName}': ${prResponse.html_url}`);
+        logSuccess(
+          `Created PR #${prResponse.number} for '${branchName}': ${prResponse.html_url}`
+        );
       } else {
         throw new Error("Invalid PR creation response");
       }
@@ -412,24 +455,26 @@ async function cmdSubmit() {
 }
 
 type PrState = {
-  state: 'MERGED' | 'CLOSED' | 'OPEN'
-}
+  state: "MERGED" | "CLOSED" | "OPEN";
+};
 
 async function fetchPrState(prNumber: number): Promise<PrState> {
   const json = (await $`gh pr view ${prNumber} --json state`).stdout;
-  console.log({ json })
+  console.log({ json });
   const parsed = JSON.parse(json);
 
-  return parsed as PrState
+  return parsed as PrState;
 }
 
 async function cmdSync() {
-  await guardContext('sync');
+  await guardContext("sync");
   await checkGhAuth();
   await guardDirtyState();
   const originalBranch = await getCurrentBranch();
 
-  logStep(`Syncing stack with '${config.baseBranch}' and checking for merged branches...`);
+  logStep(
+    `Syncing stack with '${config.baseBranch}' and checking for merged branches...`
+  );
   await $`git fetch origin --quiet`;
 
   logInfo(`Updating local base branch '${config.baseBranch}'...`);
@@ -448,7 +493,7 @@ async function cmdSync() {
     if (prNumber) {
       logInfo(`Checking status of PR #${prNumber} for branch '${branch}'...`);
       const prState = await fetchPrState(prNumber);
-      if (prState.state === 'MERGED') {
+      if (prState.state === "MERGED") {
         isMerged = true;
       }
     }
@@ -472,19 +517,21 @@ async function cmdSync() {
   }
 
   if (unmergedBranches.length > 0) {
-    logStep(`Rebasing remaining stack onto '${config.baseBranch}' with --update-refs...`);
+    logStep(
+      `Rebasing remaining stack onto '${config.baseBranch}' with --update-refs...`
+    );
     const topBranch = unmergedBranches[unmergedBranches.length - 1];
     const bottomBranch = unmergedBranches[0];
-    const oldBase = await getParentBranch(bottomBranch) || config.baseBranch;
+    const oldBase = (await getParentBranch(bottomBranch)) || config.baseBranch;
 
     await $`git checkout ${topBranch}`;
 
     const state: GssState = {
-      command: 'sync',
+      command: "sync",
       originalBranch,
       mergedBranchesToDelete: mergedBranches,
       unmergedBranches,
-      finalBase: config.baseBranch
+      finalBase: config.baseBranch,
     };
     await writeState(state);
 
@@ -496,13 +543,21 @@ async function cmdSync() {
     } catch {
       logError("Rebase conflict detected. Git has paused the rebase.");
       logInfo("Please resolve the conflicts and run 'git rebase --continue'.");
-      logSuggestion("Once the git rebase is complete, run 'gss continue' to finalize.");
+      logSuggestion(
+        "Once the git rebase is complete, run 'gss continue' to finalize."
+      );
       process.exit(1);
     }
   } else {
-    logWarning("All branches in the stack were merged. Nothing left to rebase.");
+    logWarning(
+      "All branches in the stack were merged. Nothing left to rebase."
+    );
     if (mergedBranches.length > 0) {
-      await writeState({ command: 'sync', originalBranch, mergedBranchesToDelete: mergedBranches });
+      await writeState({
+        command: "sync",
+        originalBranch,
+        mergedBranchesToDelete: mergedBranches,
+      });
       await finishOperation();
     }
   }
@@ -510,10 +565,12 @@ async function cmdSync() {
 
 async function cmdList() {
   logStep("Finding all available stacks...");
-  let allConfigs = '';
+  let allConfigs = "";
 
   try {
-    allConfigs = (await $`git config --get-regexp '^branch\..*\.parent$'`).stdout.trim();
+    allConfigs = (
+      await $`git config --get-regexp '^branch\..*\.parent$'`
+    ).stdout.trim();
   } catch (err: unknown) {
     // Check if err is ProcessOutput
     if (err instanceof ProcessOutput) {
@@ -532,7 +589,7 @@ async function cmdList() {
 
   const childrenMap = new Map<string, string[]>();
 
-  allConfigs.split('\n').forEach(line => {
+  allConfigs.split("\n").forEach((line) => {
     const match = line.match(/^branch\.(.*)\.parent (.*)$/);
 
     if (match) {
@@ -569,7 +626,7 @@ async function cmdList() {
 
     if (count > 1) {
       if (foundStacks == 0) {
-        logSuccess("Found stack(s):")
+        logSuccess("Found stack(s):");
       }
 
       foundStacks += 1;
@@ -578,15 +635,19 @@ async function cmdList() {
   }
 
   if (foundStacks == 0) {
-    logWarning("No gss stacks found.")
-    logSuggestion("Run 'gss create <branch-name>' from '$BASE_BRANCH' or an existing branch to start a new stack.")
+    logWarning("No gss stacks found.");
+    logSuggestion(
+      "Run 'gss create <branch-name>' from '$BASE_BRANCH' or an existing branch to start a new stack."
+    );
   } else {
-    logSuggestion("Run 'git checkout <branch>' to switch to a stack and see its status.")
+    logSuggestion(
+      "Run 'git checkout <branch>' to switch to a stack and see its status."
+    );
   }
 }
 
 async function cmdStatus() {
-  await guardContext('status');
+  await guardContext("status");
   await checkGhAuth();
 
   logStep("Gathering stack status...");
@@ -603,8 +664,16 @@ async function cmdStatus() {
   console.log(""); // Formatting
 
   // Display base branch status
-  const baseBehind = parseInt((await $`git rev-list --count ${config.baseBranch}..origin/${config.baseBranch}`).stdout);
-  const baseAhead = parseInt((await $`git rev-list --count origin/${config.baseBranch}..${config.baseBranch}`).stdout);
+  const baseBehind = parseInt(
+    (
+      await $`git rev-list --count ${config.baseBranch}..origin/${config.baseBranch}`
+    ).stdout
+  );
+  const baseAhead = parseInt(
+    (
+      await $`git rev-list --count origin/${config.baseBranch}..${config.baseBranch}`
+    ).stdout
+  );
   let baseStatus = "🟢 Up to date with origin";
   if (baseBehind > 0) {
     baseStatus = `🟡 Behind by ${baseBehind}`;
@@ -622,15 +691,18 @@ async function cmdStatus() {
   const currentBranch = await getCurrentBranch();
 
   for (const branch of stack) {
-    const parentBranch = await getParentBranch(branch) || config.baseBranch;
+    const parentBranch = (await getParentBranch(branch)) || config.baseBranch;
     const isCurrentBranch = currentBranch === branch ? " *" : "";
     console.log(`➡️  ${branch}${isCurrentBranch} (parent: ${parentBranch})`);
 
     // --- Status Line ---
     let statusMessage = "";
-    const parentForComparison = parentBranch === config.baseBranch ? config.baseBranch : parentBranch;
+    const parentForComparison =
+      parentBranch === config.baseBranch ? config.baseBranch : parentBranch;
 
-    const commitsBehindParent = parseInt((await $`git rev-list --count ${branch}..${parentForComparison}`).stdout);
+    const commitsBehindParent = parseInt(
+      (await $`git rev-list --count ${branch}..${parentForComparison}`).stdout
+    );
     if (commitsBehindParent > 0) {
       statusMessage = `🟡 Behind '${parentBranch}' (${commitsBehindParent} commits)`;
       if (parentBranch === config.baseBranch) {
@@ -642,7 +714,9 @@ async function cmdStatus() {
 
     if (!statusMessage) {
       try {
-        const remoteSha = (await $`git rev-parse --quiet --verify origin/${branch}`).stdout.trim();
+        const remoteSha = (
+          await $`git rev-parse --quiet --verify origin/${branch}`
+        ).stdout.trim();
         const localSha = (await $`git rev-parse ${branch}`).stdout.trim();
         if (remoteSha && localSha !== remoteSha) {
           statusMessage = "🟡 Needs push (local history has changed)";
@@ -667,12 +741,12 @@ async function cmdStatus() {
         const { stdout } = await $`gh pr view ${prNumber} --json state,url`;
         const prInfo = JSON.parse(stdout);
 
-        if (prInfo.state === 'OPEN') {
+        if (prInfo.state === "OPEN") {
           prStatus = `🟢 #${prNumber}: OPEN - ${prInfo.url}`;
-        } else if (prInfo.state === 'MERGED') {
+        } else if (prInfo.state === "MERGED") {
           prStatus = `🟣 #${prNumber}: MERGED`;
           stackHasMergedBranches = true;
-        } else if (prInfo.state === 'CLOSED') {
+        } else if (prInfo.state === "CLOSED") {
           prStatus = `🔴 #${prNumber}: CLOSED`;
         }
       } catch {
@@ -688,11 +762,15 @@ async function cmdStatus() {
 
   // --- Final Summary ---
   if (stackHasMergedBranches || baseBehind > 0 || stackIsOutOfSyncWithBase) {
-    logWarning("The stack contains merged branches or is behind the base branch.");
+    logWarning(
+      "The stack contains merged branches or is behind the base branch."
+    );
     logSuggestion("Run 'gss sync' to update the base and rebase the stack.");
   } else if (stackNeedsRestack) {
     logWarning("A branch in the stack is behind its parent.");
-    logSuggestion("Run 'gss restack' from the out-of-date branch or 'gss sync' for the whole stack.");
+    logSuggestion(
+      "Run 'gss restack' from the out-of-date branch or 'gss sync' for the whole stack."
+    );
   } else if (stackNeedsPush) {
     logWarning("One or more local branches have changed.");
     logSuggestion("Run 'gss push' to update the remote.");
@@ -705,10 +783,14 @@ async function cmdStatus() {
 }
 
 async function cmdContinue() {
-  const rebaseInProgress = await fs.exists(path.join(getGitRoot()!, '.git/rebase-merge'));
+  const rebaseInProgress = await fs.exists(
+    path.join(getGitRoot()!, ".git/rebase-merge")
+  );
   if (rebaseInProgress) {
     logError("A git rebase is still in progress.");
-    logSuggestion("Run 'git rebase --continue' until it is complete, then run 'gss continue'.");
+    logSuggestion(
+      "Run 'git rebase --continue' until it is complete, then run 'gss continue'."
+    );
     process.exit(1);
   }
 
@@ -719,11 +801,18 @@ async function cmdContinue() {
   }
 
   logStep(`Resuming '${state.command}' operation...`);
-  if (state.command === 'sync' && state.unmergedBranches && state.finalBase) {
+  if (state.command === "sync" && state.unmergedBranches && state.finalBase) {
     await repairStackMetadata(state.finalBase, state.unmergedBranches);
   }
-  if (state.command === 'restack' && state.branchesToRestack && state.restackStartBranch) {
-    await repairStackMetadata(state.restackStartBranch, state.branchesToRestack);
+  if (
+    state.command === "restack" &&
+    state.branchesToRestack &&
+    state.restackStartBranch
+  ) {
+    await repairStackMetadata(
+      state.restackStartBranch,
+      state.branchesToRestack
+    );
   }
   await finishOperation();
 }
@@ -740,7 +829,7 @@ async function cmdClean() {
 }
 
 async function cmdAmend() {
-  await guardContext('amend');
+  await guardContext("amend");
   // Amend is a special case that should operate on staged changes
   await guardDirtyState({ allowStaged: true });
 
@@ -757,7 +846,7 @@ async function cmdAmend() {
 }
 
 async function cmdRestack() {
-  await guardContext('restack');
+  await guardContext("restack");
   await guardDirtyState();
   const originalBranch = await getCurrentBranch();
 
@@ -768,7 +857,7 @@ async function cmdRestack() {
 
   let restackStartBranch: string | null = null;
   const branchesToRestack: string[] = [];
-  let parentBranch = await getParentBranch(fullStack[0]) || config.baseBranch;
+  let parentBranch = (await getParentBranch(fullStack[0])) || config.baseBranch;
   let divergenceFound = false;
 
   // 2. Find the first branch that has diverged from its parent.
@@ -794,13 +883,22 @@ async function cmdRestack() {
     return;
   }
 
-  logWarning(`Detected stack divergence at '${restackStartBranch}'. Restacking descendants...`);
+  logWarning(
+    `Detected stack divergence at '${restackStartBranch}'. Restacking descendants...`
+  );
   const topBranch = branchesToRestack[branchesToRestack.length - 1];
-  logInfo(`Will restack the following branches: ${branchesToRestack.join(' ')}`);
+  logInfo(
+    `Will restack the following branches: ${branchesToRestack.join(" ")}`
+  );
 
   await $`git checkout ${topBranch}`;
 
-  const state: GssState = { command: 'restack', originalBranch, branchesToRestack, restackStartBranch: restackStartBranch! };
+  const state: GssState = {
+    command: "restack",
+    originalBranch,
+    branchesToRestack,
+    restackStartBranch: restackStartBranch!,
+  };
   await writeState(state);
 
   try {
@@ -829,24 +927,27 @@ async function cmdRestack() {
 
       // Compare the SHAs of the branch and its logical parent.
       if (branchSha === parentSha) {
-        logWarning(`After rebasing, branch '${branch}' has no new changes compared to '${currentParent}'.`);
+        logWarning(
+          `After rebasing, branch '${branch}' has no new changes compared to '${currentParent}'.`
+        );
       }
       currentParent = branch;
     }
 
     await repairStackMetadata(restackStartBranch!, branchesToRestack);
     await finishOperation();
-
   } catch (e) {
     logError("Rebase conflict detected. Git has paused the rebase.");
     logInfo("Please resolve the conflicts and run 'git rebase --continue'.");
-    logSuggestion("Once the git rebase is complete, run 'gss continue' to finalize.");
+    logSuggestion(
+      "Once the git rebase is complete, run 'gss continue' to finalize."
+    );
     process.exit(1);
   }
 }
 
 async function cmdPr() {
-  await guardContext('pr');
+  await guardContext("pr");
   await checkGhAuth();
   const prNumber = await getPrNumber(await getCurrentBranch());
   if (prNumber) {
@@ -860,7 +961,7 @@ async function cmdPr() {
 
 async function cmdTrack(subcommand: string, parent?: string) {
   const currentBranch = await getCurrentBranch();
-  if (subcommand === 'set') {
+  if (subcommand === "set") {
     const parentBranch = parent || config.baseBranch;
     try {
       await $`git rev-parse --verify ${parentBranch}`;
@@ -871,19 +972,25 @@ async function cmdTrack(subcommand: string, parent?: string) {
     try {
       await $`git merge-base --is-ancestor ${parentBranch} ${currentBranch}`;
     } catch {
-      logError(`Invalid parent: '${parentBranch}' is not an ancestor of '${currentBranch}'.`);
+      logError(
+        `Invalid parent: '${parentBranch}' is not an ancestor of '${currentBranch}'.`
+      );
       process.exit(1);
     }
     await setParentBranch(currentBranch, parentBranch);
     logSuccess(`Set parent of '${currentBranch}' to '${parentBranch}'.`);
-  } else if (subcommand === 'remove') {
-    await guardContext('track remove');
+  } else if (subcommand === "remove") {
+    await guardContext("track remove");
     const parentBranch = await getParentBranch(currentBranch);
 
     // Safeguard: only allow removal if the branch has no unique commits.
-    const commitCount = parseInt((await $`git rev-list --count ${parentBranch}..${currentBranch}`).stdout);
+    const commitCount = parseInt(
+      (await $`git rev-list --count ${parentBranch}..${currentBranch}`).stdout
+    );
     if (commitCount > 0) {
-      logError(`Cannot untrack '${currentBranch}' because it contains unique commits.`);
+      logError(
+        `Cannot untrack '${currentBranch}' because it contains unique commits.`
+      );
       logSuggestion("Consider running 'gss squash' to integrate its changes.");
       process.exit(1);
     }
@@ -893,29 +1000,38 @@ async function cmdTrack(subcommand: string, parent?: string) {
     const childBranches = await getChildBranches(currentBranch);
 
     for (const childBranch of childBranches) {
-      logInfo(`Reparing stack: setting parent of ${childBranch} to ${parentBranch}`)
-      setParentBranch(childBranch, parentBranch)
+      logInfo(
+        `Reparing stack: setting parent of ${childBranch} to ${parentBranch}`
+      );
+      setParentBranch(childBranch, parentBranch);
     }
   } else {
-    logError(`Unknown subcommand for track: ${subcommand}. Use 'set' or 'remove'.`);
+    logError(
+      `Unknown subcommand for track: ${subcommand}. Use 'set' or 'remove'.`
+    );
     printHelp();
     process.exit(1);
   }
 }
 
-async function cmdInsert(branchName: string, { before }: { before?: boolean } = {}) {
+async function cmdInsert(
+  branchName: string,
+  { before }: { before?: boolean } = {}
+) {
   if (!branchName) {
     logError("Branch name is required for insert.");
     process.exit(1);
   }
-  await guardContext('insert');
+  await guardContext("insert");
   await guardDirtyState();
 
   const currentBranch = await getCurrentBranch();
   const parent = await getParentBranch(currentBranch);
 
   const insertionPoint = before ? parent : currentBranch;
-  const childToReparent = before ? currentBranch : (await getChildBranches(currentBranch))[0];
+  const childToReparent = before
+    ? currentBranch
+    : (await getChildBranches(currentBranch))[0];
 
   await $`git checkout -b ${branchName} ${insertionPoint}`;
   await setParentBranch(branchName, insertionPoint);
@@ -929,18 +1045,18 @@ async function cmdInsert(branchName: string, { before }: { before?: boolean } = 
   await $`git checkout ${branchName}`;
 }
 
-async function cmdSquash({ into }: { into?: 'parent' | 'child' } = {}) {
-  await guardContext('squash');
+async function cmdSquash({ into }: { into?: "parent" | "child" } = {}) {
+  await guardContext("squash");
   await guardDirtyState();
 
-  const direction = into || 'parent';
+  const direction = into || "parent";
   const currentBranch = await getCurrentBranch();
   const parentBranch = await getParentBranch(currentBranch);
   const childBranches = await getChildBranches(currentBranch);
   const childBranch = childBranches[0]; // Assuming no forks for squash
 
-  const targetBranch = direction === 'parent' ? parentBranch : currentBranch;
-  const branchToSquash = direction === 'parent' ? currentBranch : childBranch;
+  const targetBranch = direction === "parent" ? parentBranch : currentBranch;
+  const branchToSquash = direction === "parent" ? currentBranch : childBranch;
 
   if (!targetBranch || !branchToSquash) {
     logError("Could not determine branches for squash operation.");
@@ -964,7 +1080,10 @@ async function cmdSquash({ into }: { into?: 'parent' | 'child' } = {}) {
     }
 
     const prToClose = await getPrNumber(branchToSquash);
-    if (prToClose && await confirm(`Close associated PR #${prToClose} for deleted branch?`)) {
+    if (
+      prToClose &&
+      (await confirm(`Close associated PR #${prToClose} for deleted branch?`))
+    ) {
       await $`gh pr close ${prToClose}`;
     }
 
@@ -981,7 +1100,6 @@ async function cmdSquash({ into }: { into?: 'parent' | 'child' } = {}) {
     logWarning("Squash cancelled.");
   }
 }
-
 
 function printHelp() {
   console.log(`
@@ -1027,15 +1145,17 @@ Housekeeping:
 async function main() {
   const gitRoot = getGitRoot();
   if (!gitRoot) {
-    logError('Not a git repository. Please run gss from within a git repository.');
+    logError(
+      "Not a git repository. Please run gss from within a git repository."
+    );
     process.exit(1);
   }
-  stateFile = path.join(gitRoot, '.git', 'GSS_OPERATION_STATE');
-  configCacheFile = path.join(gitRoot, '.git', 'GSS_CONFIG_CACHE');
+  stateFile = path.join(gitRoot, ".git", "GSS_OPERATION_STATE");
+  configCacheFile = path.join(gitRoot, ".git", "GSS_CONFIG_CACHE");
 
   let args = process.argv.slice(2);
 
-  const yesFlagIndex = args.findIndex(arg => arg === '-y' || arg === '--yes');
+  const yesFlagIndex = args.findIndex((arg) => arg === "-y" || arg === "--yes");
   if (yesFlagIndex !== -1) {
     autoConfirm = true;
     args.splice(yesFlagIndex, 1);
@@ -1044,37 +1164,70 @@ async function main() {
   const command = args[0];
   const commandArgs = args.slice(1);
 
-
-  if (command && !['clean', 'help', '--help', '-h'].includes(command)) {
+  if (command && !["clean", "help", "--help", "-h"].includes(command)) {
     await initializeConfig();
   }
 
   switch (command) {
-    case 'create': await cmdCreate(commandArgs[0]); break;
-    case 'up': await cmdUp(); break;
-    case 'down': await cmdDown(); break;
-    case 'push': await cmdPush(); break;
-    case 'submit': await cmdSubmit(); break;
-    case 'sync': await cmdSync(); break;
-    case 'list': case 'ls': await cmdList(); break;
-    case 'status': await cmdStatus(); break;
-    case 'continue': await cmdContinue(); break;
-    case 'clean': await cmdClean(); break;
-    case 'amend': await cmdAmend(); break;
-    case 'restack': await cmdRestack(); break;
-    case 'pr': await cmdPr(); break;
-    case 'track': await cmdTrack(commandArgs[0], commandArgs[1]); break;
-    case 'insert':
-      const before = commandArgs.includes('--before');
-      const branchName = commandArgs.find(a => !a.startsWith('--'));
+    case "create":
+      await cmdCreate(commandArgs[0]);
+      break;
+    case "up":
+      await cmdUp();
+      break;
+    case "down":
+      await cmdDown();
+      break;
+    case "push":
+      await cmdPush();
+      break;
+    case "submit":
+      await cmdSubmit();
+      break;
+    case "sync":
+      await cmdSync();
+      break;
+    case "list":
+    case "ls":
+      await cmdList();
+      break;
+    case "status":
+      await cmdStatus();
+      break;
+    case "continue":
+      await cmdContinue();
+      break;
+    case "clean":
+      await cmdClean();
+      break;
+    case "amend":
+      await cmdAmend();
+      break;
+    case "restack":
+      await cmdRestack();
+      break;
+    case "pr":
+      await cmdPr();
+      break;
+    case "track":
+      await cmdTrack(commandArgs[0], commandArgs[1]);
+      break;
+    case "insert":
+      const before = commandArgs.includes("--before");
+      const branchName = commandArgs.find((a) => !a.startsWith("--"));
       if (branchName) await cmdInsert(branchName, { before });
       else logError("Branch name required for insert.");
       break;
-    case 'squash':
-      const into = commandArgs.includes('--into') ? commandArgs[commandArgs.indexOf('--into') + 1] as any : 'parent';
+    case "squash":
+      const into = commandArgs.includes("--into")
+        ? (commandArgs[commandArgs.indexOf("--into") + 1] as any)
+        : "parent";
       await cmdSquash({ into });
       break;
-    case 'help': case '--help': case '-h': case undefined:
+    case "help":
+    case "--help":
+    case "-h":
+    case undefined:
       printHelp();
       break;
     default:
@@ -1084,7 +1237,7 @@ async function main() {
   }
 }
 
-main().catch(err => {
+main().catch((err) => {
   if (err.stderr) {
     logError(err.stderr.trim());
   } else {
@@ -1092,4 +1245,3 @@ main().catch(err => {
   }
   process.exit(1);
 });
-
