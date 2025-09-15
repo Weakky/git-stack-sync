@@ -760,20 +760,26 @@ async function cmdRestack() {
   await guardContext('restack');
   await guardDirtyState();
   const originalBranch = await getCurrentBranch();
-  logStep("Checking stack integrity...");
 
-  const fullStack = await getFullStack(originalBranch);
+  logStep("Checking stack integrity to find point of divergence...");
+
+  // 1. Get the full ordered list of branches in the current stack.
+  const fullStack = await getFullStack();
+
   let restackStartBranch: string | null = null;
   const branchesToRestack: string[] = [];
   let parentBranch = await getParentBranch(fullStack[0]) || config.baseBranch;
   let divergenceFound = false;
 
+  // 2. Find the first branch that has diverged from its parent.
   for (const childBranch of fullStack) {
     if (divergenceFound) {
       branchesToRestack.push(childBranch);
       continue;
     }
+
     try {
+      // A branch has diverged if its parent is not one of its ancestors.
       await $`git merge-base --is-ancestor ${parentBranch} ${childBranch}`;
       parentBranch = childBranch;
     } catch {
@@ -789,9 +795,9 @@ async function cmdRestack() {
   }
 
   logWarning(`Detected stack divergence at '${restackStartBranch}'. Restacking descendants...`);
-  logInfo(`Will restack: ${branchesToRestack.join(' ')}`);
-
   const topBranch = branchesToRestack[branchesToRestack.length - 1];
+  logInfo(`Will restack the following branches: ${branchesToRestack.join(' ')}`);
+
   await $`git checkout ${topBranch}`;
 
   const state: GssState = { command: 'restack', originalBranch, branchesToRestack, restackStartBranch: restackStartBranch! };
@@ -799,12 +805,42 @@ async function cmdRestack() {
 
   try {
     await $`git rebase --update-refs --onto ${restackStartBranch} ${restackStartBranch} ${topBranch}`;
-    logSuccess("Restack complete.");
+    logSuccess("Restack complete. Correcting intermediate branch pointers...");
+
+    // The rebase operation leaves HEAD on the updated top_branch. We use this as our
+    // reliable anchor to walk backwards and fix the pointers of any intermediate
+    // branches that git didn't update because they became empty.
+    const numBranchesRebased = branchesToRestack.length;
+    // We iterate from the branch just below the top one, backwards.
+    for (let i = 1; i < numBranchesRebased; i++) {
+      // i=1 corresponds to the 2nd branch from the top, which is at HEAD~1
+      const branchToFixIndex = numBranchesRebased - 1 - i;
+      const branchToFix = branchesToRestack[branchToFixIndex];
+      const newCommitRef = `HEAD~${i}`;
+      await $`git branch -f ${branchToFix} ${newCommitRef}`;
+    }
+
+    // Now that all branch pointers are guaranteed to be correct, we can
+    // perform a second pass to check for emptiness and warn the user.
+    let currentParent = restackStartBranch!;
+    for (const branch of branchesToRestack) {
+      const branchSha = (await $`git rev-parse ${branch}`).stdout.trim();
+      const parentSha = (await $`git rev-parse ${currentParent}`).stdout.trim();
+
+      // Compare the SHAs of the branch and its logical parent.
+      if (branchSha === parentSha) {
+        logWarning(`After rebasing, branch '${branch}' has no new changes compared to '${currentParent}'.`);
+      }
+      currentParent = branch;
+    }
+
     await repairStackMetadata(restackStartBranch!, branchesToRestack);
     await finishOperation();
-  } catch {
-    logError("Rebase conflict detected.");
-    logSuggestion("Resolve conflicts, run 'git rebase --continue', then 'gss continue'.");
+
+  } catch (e) {
+    logError("Rebase conflict detected. Git has paused the rebase.");
+    logInfo("Please resolve the conflicts and run 'git rebase --continue'.");
+    logSuggestion("Once the git rebase is complete, run 'gss continue' to finalize.");
     process.exit(1);
   }
 }
