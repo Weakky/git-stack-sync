@@ -1,4 +1,4 @@
-#!/usr/bin/env zx
+#!/usr/bin/env node
 
 import { $, chalk, fs, path, question } from 'zx';
 
@@ -558,16 +558,18 @@ async function cmdStatus() {
     }
 
     if (!statusMessage) {
-      const remoteSha = (await $`git rev-parse --quiet --verify origin/${branch}`).stdout.trim();
-      const localSha = (await $`git rev-parse ${branch}`).stdout.trim();
-      if (remoteSha && localSha !== remoteSha) {
-        statusMessage = chalk.yellow('Needs push');
-        needsPush = true;
-      } else if (!remoteSha) {
+      try {
+        const remoteSha = (await $`git rev-parse --quiet --verify origin/${branch}`).stdout.trim();
+        const localSha = (await $`git rev-parse ${branch}`).stdout.trim();
+        if (remoteSha && localSha !== remoteSha) {
+          statusMessage = chalk.yellow('Needs push');
+          needsPush = true;
+        } else {
+          statusMessage = chalk.green('Synced');
+        }
+      } catch {
         statusMessage = 'Not on remote';
         needsPush = true;
-      } else {
-        statusMessage = chalk.green('Synced');
       }
     }
     console.log(`   ├─ Status: ${statusMessage}`);
@@ -576,11 +578,15 @@ async function cmdStatus() {
     const prNumber = await getPrNumber(branch);
     let prStatus = '';
     if (prNumber) {
-      const prInfo = JSON.parse((await $`gh pr view ${prNumber} --json state,url`).stdout);
-      switch (prInfo.state) {
-        case 'OPEN': prStatus = chalk.green(`🟢 #${prNumber}: OPEN`); break;
-        case 'MERGED': prStatus = chalk.magenta(`🟣 #${prNumber}: MERGED`); needsSync = true; break;
-        case 'CLOSED': prStatus = chalk.red(`🔴 #${prNumber}: CLOSED`); break;
+      try {
+        const prInfo = JSON.parse((await $`gh pr view ${prNumber} --json state,url`).stdout);
+        switch (prInfo.state) {
+          case 'OPEN': prStatus = chalk.green(`🟢 #${prNumber}: OPEN`); break;
+          case 'MERGED': prStatus = chalk.magenta(`🟣 #${prNumber}: MERGED`); needsSync = true; break;
+          case 'CLOSED': prStatus = chalk.red(`🔴 #${prNumber}: CLOSED`); break;
+        }
+      } catch {
+        prStatus = chalk.yellow(`🟡 Could not fetch status for PR #${prNumber}`);
       }
     } else {
       prStatus = '⚪ No PR submitted';
@@ -642,6 +648,7 @@ async function cmdAmend() {
   logWarning("You are about to amend the last commit.");
   if (await confirm("Are you sure you want to continue?")) {
     logStep("Amending changes...");
+    await $`git add .`;
     await $`git commit --amend --no-edit`;
     logSuccess("Commit amended successfully.");
     await cmdRestack();
@@ -659,7 +666,7 @@ async function cmdRestack() {
   const fullStack = await getFullStack(originalBranch);
   let restackStartBranch: string | null = null;
   const branchesToRestack: string[] = [];
-  let parentBranch = config.baseBranch;
+  let parentBranch = await getParentBranch(fullStack[0]) || config.baseBranch;
   let divergenceFound = false;
 
   for (const childBranch of fullStack) {
@@ -688,14 +695,12 @@ async function cmdRestack() {
   const topBranch = branchesToRestack[branchesToRestack.length - 1];
   await $`git checkout ${topBranch}`;
 
-  // TODO: Is it expected that we need to ! restackStartBranch here?
   const state: GssState = { command: 'restack', originalBranch, branchesToRestack, restackStartBranch: restackStartBranch! };
   await writeState(state);
 
   try {
     await $`git rebase --update-refs --onto ${restackStartBranch} ${restackStartBranch} ${topBranch}`;
     logSuccess("Restack complete.");
-    // TODO: Is it expected that we need to ! restackStartBranch here?
     await repairStackMetadata(restackStartBranch!, branchesToRestack);
     await finishOperation();
   } catch {
@@ -728,10 +733,23 @@ async function cmdTrack(subcommand: string, parent?: string) {
       logError(`Parent branch '${parentBranch}' does not exist.`);
       process.exit(1);
     }
+    try {
+      await $`git merge-base --is-ancestor ${parentBranch} ${currentBranch}`;
+    } catch {
+      logError(`Invalid parent: '${parentBranch}' is not an ancestor of '${currentBranch}'.`);
+      process.exit(1);
+    }
     await setParentBranch(currentBranch, parentBranch);
     logSuccess(`Set parent of '${currentBranch}' to '${parentBranch}'.`);
   } else if (subcommand === 'remove') {
     await guardContext('track remove');
+    const parent = await getParentBranch(currentBranch);
+    const commitCount = parseInt((await $`git rev-list --count ${parent}..${currentBranch}`).stdout);
+    if (commitCount > 0) {
+      logError(`Cannot untrack '${currentBranch}' because it contains unique commits.`);
+      logSuggestion("Consider running 'gss squash' to integrate its changes.");
+      process.exit(1);
+    }
     await unsetParentBranch(currentBranch);
     logSuccess(`Stopped tracking '${currentBranch}'.`);
   } else {
@@ -750,7 +768,9 @@ async function cmdInsert(branchName: string, { before }: { before?: boolean } = 
   await guardDirtyState();
 
   const currentBranch = await getCurrentBranch();
-  const insertionPoint = before ? (await getParentBranch(currentBranch)) : currentBranch;
+  const parent = await getParentBranch(currentBranch);
+
+  const insertionPoint = before ? parent : currentBranch;
   const childToReparent = before ? currentBranch : (await getChildBranches(currentBranch))[0];
 
   await $`git checkout -b ${branchName} ${insertionPoint}`;
@@ -758,10 +778,9 @@ async function cmdInsert(branchName: string, { before }: { before?: boolean } = 
   logSuccess(`Created branch '${branchName}' on top of '${insertionPoint}'.`);
 
   if (childToReparent) {
-    logStep(`Re-parenting and rebasing '${childToReparent}'...`);
+    logStep(`Re-parenting and rebasing descendants of '${childToReparent}'...`);
     await setParentBranch(childToReparent, branchName);
-    const fullStackToRebase = await getFullStack(childToReparent);
-    await cmdRestack(); // The easiest way to rebase the sub-stack
+    await cmdRestack();
   }
   await $`git checkout ${branchName}`;
 }
@@ -773,7 +792,8 @@ async function cmdSquash({ into }: { into?: 'parent' | 'child' } = {}) {
   const direction = into || 'parent';
   const currentBranch = await getCurrentBranch();
   const parentBranch = await getParentBranch(currentBranch);
-  const childBranch = (await getChildBranches(currentBranch))[0];
+  const childBranches = await getChildBranches(currentBranch);
+  const childBranch = childBranches[0]; // Assuming no forks for squash
 
   const targetBranch = direction === 'parent' ? parentBranch : currentBranch;
   const branchToSquash = direction === 'parent' ? currentBranch : childBranch;
@@ -790,6 +810,7 @@ async function cmdSquash({ into }: { into?: 'parent' | 'child' } = {}) {
 
     logInfo("Please provide a commit message for the squashed changes.");
     try {
+      // This is tricky to do non-interactively. We'll rely on the user having a configured editor.
       await $`git commit`;
     } catch {
       logError("Commit aborted. Undoing squash.");
