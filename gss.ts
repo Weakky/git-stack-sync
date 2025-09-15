@@ -1167,55 +1167,140 @@ async function cmdSquash({ into }: { into?: "parent" | "child" } = {}) {
   await guardContext("squash");
   await guardDirtyState();
 
+  if (into && !["parent", "child"].includes(into)) {
+    logError(`Invalid --into argument.`);
+    logInfo("Usage: gss squash [--into parent|child]");
+    process.exit(1);
+  }
+
   const direction = into || "parent";
   const currentBranch = await getCurrentBranch();
   const parentBranch = await getParentBranch(currentBranch);
   const childBranches = await getChildBranches(currentBranch);
   const childBranch = childBranches[0]; // Assuming no forks for squash
 
-  const targetBranch = direction === "parent" ? parentBranch : currentBranch;
-  const branchToSquash = direction === "parent" ? currentBranch : childBranch;
+  let targetBranch: string | undefined;
+  let branchToSquash: string | undefined;
+  let grandChild: string | undefined;
+
+  if (direction === "parent") {
+    if (parentBranch === config.baseBranch) {
+      logError(
+        `Cannot squash the first branch of a stack into '${config.baseBranch}'.`
+      );
+      process.exit(1);
+    }
+    targetBranch = parentBranch;
+    branchToSquash = currentBranch;
+    grandChild = childBranch;
+  } else if (direction === "child") {
+    if (!childBranch) {
+      logError("No child branch found to squash into.");
+      process.exit(1);
+    }
+    targetBranch = currentBranch;
+    branchToSquash = childBranch;
+    grandChild = (await getChildBranches(childBranch))[0];
+  } else {
+    logError(
+      `Invalid direction for squash: '${direction}'. Must be 'parent' or 'child'.`
+    );
+    process.exit(1);
+  }
 
   if (!targetBranch || !branchToSquash) {
     logError("Could not determine branches for squash operation.");
     process.exit(1);
   }
 
+  // --- Confirmation Prompt ---
+  const stackBefore = await getFullStack();
+  console.log("");
   logStep(`Squashing '${branchToSquash}' into '${targetBranch}'...`);
-  if (await confirm("This will delete the squashed branch. Continue?")) {
-    await $`git checkout ${targetBranch}`;
-    await $`git merge --squash ${branchToSquash}`;
+  logInfo("Stack Before:");
+  stackBefore.forEach((branch) => {
+    if (branch === branchToSquash) {
+      logInfo(`     - ${chalk.red(branch)}  <-- to be squashed and deleted`);
+    } else {
+      logInfo(`     - ${branch}`);
+    }
+  });
 
-    logInfo("Please provide a commit message for the squashed changes.");
-    try {
-      // This is tricky to do non-interactively. We'll rely on the user having a configured editor.
-      await $`git commit`;
-    } catch {
-      logError("Commit aborted. Undoing squash.");
-      await $`git reset --hard HEAD`;
-      await $`git checkout ${currentBranch}`;
-      return;
+  logInfo("Stack After:");
+  stackBefore.forEach((branch) => {
+    if (branch === branchToSquash) {
+      return; // Skip deleted branch
     }
 
-    const prToClose = await getPrNumber(branchToSquash);
-    if (
-      prToClose &&
-      (await confirm(`Close associated PR #${prToClose} for deleted branch?`))
-    ) {
-      await $`gh pr close ${prToClose}`;
+    if (branch === targetBranch) {
+      logInfo(
+        `     - ${chalk.yellow(
+          branch
+        )} <-- will contain commits from '${branchToSquash}'`
+      );
+    } else {
+      logInfo(`     - ${branch}`);
     }
+  });
+  console.log("");
 
-    const grandChild = (await getChildBranches(branchToSquash))[0];
-    if (grandChild) {
-      await setParentBranch(grandChild, targetBranch);
-    }
-
-    await $`git branch -D ${branchToSquash}`;
-    await unsetParentBranch(branchToSquash);
-    logSuccess("Squash complete.");
-    if (grandChild) logSuggestion("Run 'gss restack' to update descendants.");
-  } else {
+  if (!(await confirm("Are you sure you want to continue?"))) {
     logWarning("Squash cancelled.");
+    process.exit(0);
+  }
+
+  // --- Git Operations ---
+  await $`git checkout ${targetBranch}`;
+  await $`git merge --squash ${branchToSquash}`;
+
+  logInfo("Please provide a commit message for the squashed changes.");
+  // This will open the user's default editor.
+  // We need to allow zx to become interactive for this.
+  try {
+    const previousShell = $.shell;
+    const previousPrefix = $.prefix;
+    $.shell = "/bin/bash";
+    $.prefix = "";
+    await $`git commit`;
+    $.shell = previousShell;
+    $.prefix = previousPrefix;
+  } catch {
+    logError("Commit failed or was aborted. Undoing squash.");
+    await $`git reset --hard HEAD`;
+    await $`git checkout ${currentBranch}`;
+    process.exit(1);
+  }
+
+  // --- Cleanup and Metadata Repair ---
+  const prNumberToClose = await getPrNumber(branchToSquash);
+  if (prNumberToClose) {
+    if (
+      await confirm(
+        `Do you want to close the associated GitHub PR #${prNumberToClose} for the deleted branch '${branchToSquash}'?`
+      )
+    ) {
+      logStep(`Closing PR #${prNumberToClose} on GitHub...`);
+      await $`gh pr close ${prNumberToClose}`;
+      logSuccess(`PR #${prNumberToClose} closed.`);
+    }
+  }
+
+  await $`git branch -D ${branchToSquash}`;
+  // Unset parent after deleting branch to keep cache clean
+  await unsetParentBranch(branchToSquash);
+
+  if (grandChild) {
+    await setParentBranch(grandChild, targetBranch);
+  }
+
+  logSuccess(
+    `Successfully squashed '${branchToSquash}' into '${targetBranch}'.`
+  );
+
+  if (grandChild) {
+    logSuggestion("Run 'gss restack' to update descendant branches.");
+  } else {
+    logSuggestion("Run 'gss push' to update the remote with your changes.");
   }
 }
 
