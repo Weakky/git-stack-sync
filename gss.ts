@@ -131,30 +131,20 @@ async function getCurrentBranch(): Promise<string> {
 /**
  * Gets the parent of a branch from the JSON config.
  */
-function getParentBranch(branch: string): string | undefined {
-  return config.branchParents[branch];
+function getParentBranch(branch: string): string | null {
+  return config.branchParents[branch] || null;
 }
 
 /**
- * Gets child of a branch from the JSON config.
+ * Gets the single child of a branch from the JSON config.
  */
 function getChildBranch(parentBranch: string): string | null {
-  let children = Object.keys(config.branchParents).filter(
-    (child) => config.branchParents[child] === parentBranch
-  );
-
-  if (children.length === 0 || !children[0]) {
-    return null;
+  for (const child in config.branchParents) {
+    if (config.branchParents[child] === parentBranch) {
+      return child;
+    }
   }
-
-  if (children.length > 1) {
-    logError(
-      `Branch '${parentBranch}' has multiple children: ${children.join(", ")}`
-    );
-    process.exit(1);
-  }
-
-  return children[0];
+  return null;
 }
 
 /**
@@ -175,15 +165,17 @@ async function unsetParentBranch(childBranch: string) {
 
 async function getStackTop(): Promise<string> {
   let currentBranch = await getCurrentBranch();
+
   while (true) {
     const child = getChildBranch(currentBranch);
 
-    if (child !== null) {
+    if (child) {
       currentBranch = child;
     } else {
       break;
     }
   }
+
   return currentBranch;
 }
 
@@ -191,7 +183,7 @@ async function getFullStack(): Promise<string[]> {
   const top = await getStackTop();
   const stack: string[] = [];
 
-  let current: string | undefined = top;
+  let current: string | null = top;
 
   while (current && current !== config.baseBranch) {
     stack.unshift(current);
@@ -370,7 +362,7 @@ async function cmdCreate(branchName?: string) {
   try {
     await $`git checkout -b ${branchName}`;
   } catch {
-    await guardDirtyState(); // provide a better error message if checkout fails due to dirty state
+    await guardDirtyState();
     logError(
       `Could not create branch '${branchName}'. It might already exist.`
     );
@@ -701,9 +693,10 @@ async function cmdList() {
     let currentBranch = bottom;
 
     while (true) {
-      const children = childrenMap.get(currentBranch);
-      if (children && children.length > 0) {
-        currentBranch = children[0]!;
+      const child = getChildBranch(currentBranch);
+
+      if (child) {
+        currentBranch = child;
         count += 1;
       } else {
         break;
@@ -719,7 +712,7 @@ async function cmdList() {
     }
   }
 
-  if (foundStacks == 0) {
+  if (foundStacks === 0) {
     logWarning("No gss stacks found.");
     logSuggestion(
       `Run 'gss create <branch-name>' from '${config.baseBranch}' or an existing branch to start a new stack.`
@@ -746,7 +739,7 @@ async function cmdStatus() {
     return;
   }
 
-  console.log(""); // Formatting
+  console.log(); // Formatting
 
   // Display base branch status
   const baseBehind = parseInt(
@@ -1109,10 +1102,9 @@ async function cmdTrack(subcommand?: string, parent?: string) {
       process.exit(1);
     }
 
-    // Atomically update config: remove branch and re-parent children
-    delete config.branchParents[currentBranch];
-
     const childBranch = getChildBranch(currentBranch);
+
+    delete config.branchParents[currentBranch];
 
     if (childBranch) {
       logInfo(
@@ -1143,7 +1135,7 @@ async function cmdInsert(
   await guardDirtyState();
 
   const currentBranch = await getCurrentBranch();
-  let insertionPoint: string | undefined;
+  let insertionPoint: string | null = null;
   let childToReparent: string | null = null;
 
   if (before) {
