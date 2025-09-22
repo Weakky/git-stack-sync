@@ -159,3 +159,29 @@ teardown() {
     # The PR number should NOT have been saved.
     assert_branch_has_no_pr_number feature-a
 }
+
+@test "submit: tracks an existing untracked PR on GitHub" {
+    # This test ensures that if a PR exists on GitHub but is not tracked
+    # by gss locally, 'submit' will find it, track it, and not create a new one.
+    # NOTE: This test requires a new helper function 'mock_existing_pr <branch> <pr_number>' 
+    # in test_helper.bash and a corresponding update to the 'tests/mocks/gh' 
+    # script to handle 'gh pr view <branch-name> --json number'.
+
+    # Setup
+    create_stack feature-a
+    # We simulate that PR #30 was created on GitHub for 'feature-a' outside of gss.
+    mock_untracked_pr feature-a 30
+
+    # Action
+    run "$GSS_CMD" submit
+
+    # Assertions
+    assert_success
+    # The output should show that it found and tracked the PR, not created one.
+    assert_output --partial "Tracked PR #30 for branch 'feature-a'"
+    refute_output --partial "Created PR"
+
+    # --- State Assertions ---
+    # The config should now contain the PR number it discovered.
+    assert_branch_pr_number feature-a 30
+}
