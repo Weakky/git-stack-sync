@@ -665,36 +665,31 @@ async function cmdSync() {
 async function cmdList() {
   logStep("Finding all available stacks...");
 
-  const allParents = config.branchParents;
-  if (Object.keys(allParents).length === 0) {
+  const { branchParents, baseBranch } = config;
+  const allChildBranches = Object.keys(branchParents);
+
+  if (allChildBranches.length === 0) {
     logWarning("No gss stacks found.");
     logSuggestion(
-      `Run 'gss create <branch-name>' from '${config.baseBranch}' to start a stack.`
+      `Run 'gss create <branch-name>' from '${baseBranch}' to start a stack.`
     );
     return;
   }
 
-  const childrenMap = new Map<string, string[]>();
-  Object.entries(allParents).forEach(([child, parent]) => {
-    if (!childrenMap.has(parent)) {
-      childrenMap.set(parent, []);
-    }
-    childrenMap.get(parent)!.push(child);
-  });
+  // Find the bottom of each stack (branches whose parent is the base branch)
+  const stackBottoms = allChildBranches.filter(
+    (child) => branchParents[child] === baseBranch
+  );
 
-  const bottoms = childrenMap.get(config.baseBranch) || [];
-
-  // Check if any stacks has a children.
-  // If so, log "Found stack(s)" with all stacks having more than one children
   let foundStacks = 0;
 
-  for (const bottom of bottoms) {
+  for (const bottom of stackBottoms) {
     let count = 1;
     let currentBranch = bottom;
 
+    // Traverse down the stack to count its length
     while (true) {
       const child = getChildBranch(currentBranch);
-
       if (child) {
         currentBranch = child;
         count += 1;
@@ -715,7 +710,7 @@ async function cmdList() {
   if (foundStacks === 0) {
     logWarning("No gss stacks found.");
     logSuggestion(
-      `Run 'gss create <branch-name>' from '${config.baseBranch}' or an existing branch to start a new stack.`
+      `Run 'gss create <branch-name>' from '${baseBranch}' or an existing branch to start a new stack.`
     );
   } else {
     logSuggestion(
@@ -1481,3 +1476,4 @@ main().catch((err) => {
   }
   process.exit(1);
 });
+
