@@ -5,16 +5,17 @@ load 'bats-assert/load'
 load 'test_helper'
 load 'debug'
 
-# --- Variables ---
-GSS_CMD_BASE="$BATS_TEST_DIRNAME/../gss"
+# --- Variables and Pre-run Checks ---
+GSS_CMD_BASE="$BATS_TEST_DIRNAME/../dist/index"
 GSS_CMD=""
 
+# Auto-detect whether the script is named 'gss' or 'gss.sh'
 if [[ -f "$GSS_CMD_BASE" ]]; then
     GSS_CMD="$GSS_CMD_BASE"
-elif [[ -f "${GSS_CMD_BASE}.sh" ]]; then
-    GSS_CMD="${GSS_CMD_BASE}.sh"
+elif [[ -f "${GSS_CMD_BASE}.js" ]]; then
+    GSS_CMD="${GSS_CMD_BASE}.js"
 else
-    echo "🔴 Error: Could not find the gss script." >&2
+    echo "🔴 Error: Could not find the gss script. Looked for '$GSS_CMD_BASE' and '${GSS_CMD_BASE}.sh'." >&2
     exit 1
 fi
 export PATH="$BATS_TEST_DIRNAME/mocks:$PATH"
@@ -36,7 +37,7 @@ teardown() {
 
 # --- Test Suite for the "Smart" gss restack ---
 
-@test "smart restack: does nothing if stack is consistent" {
+@test "restack: does nothing if stack is consistent" {
     # This test verifies that if the stack has no breaks in its history,
     # the command exits cleanly without performing any actions.
     
@@ -57,7 +58,7 @@ teardown() {
     assert_equal "$shas_before" "$shas_after"
 }
 
-@test "smart restack: amends bottom, runs from top" {
+@test "restack: amends bottom, runs from top" {
     # SCENARIO: The first branch of the stack is amended.
     # We run 'restack' from the top to ensure it can find the break
     # all the way at the bottom and fix the entire stack.
@@ -87,7 +88,7 @@ teardown() {
     assert_current_branch br3
 }
 
-@test "smart restack: amends middle, runs from top" {
+@test "restack: amends middle, runs from top" {
     # SCENARIO: A branch in the middle of the stack is amended.
     # We run 'restack' from the top. It should detect the break at br2
     # and only restack the branches above it (br3).
@@ -117,7 +118,7 @@ teardown() {
     assert_current_branch br3
 }
 
-@test "smart restack: amends middle, runs from bottom" {
+@test "restack: amends middle, runs from bottom" {
     # SCENARIO: A branch in the middle is amended, but we run the command
     # from a branch *below* the change. The tool should still find the
     # break and fix the stack above it.
@@ -144,7 +145,7 @@ teardown() {
     assert_current_branch br1
 }
 
-@test "smart restack: amends top, runs from anywhere" {
+@test "restack: amends top, runs from anywhere" {
     # SCENARIO: The top-most branch is amended. There are no descendants to
     # restack, so the command should detect this and do nothing.
     
@@ -168,7 +169,7 @@ teardown() {
     assert_current_branch br3
 }
 
-@test "smart restack: interactive rebase drops a commit from middle" {
+@test "restack: interactive rebase drops a commit from middle" {
     # SCENARIO: A more complex history edit where a commit is simply removed
     # from a middle branch. This is a powerful test because the branch still
     # exists, but its history has fundamentally changed.
@@ -205,7 +206,7 @@ teardown() {
     refute_output --partial "$commit_to_drop_sha"
 }
 
-@test "smart restack: diverged base of stack" {
+@test "restack: diverged base of stack" {
     # SCENARIO: The bottom branch of the stack is rebased onto a different
     # commit on main. This is a common scenario when cleaning up history.
     # `restack` should detect the break between `br1` and `br2`.
@@ -234,4 +235,182 @@ teardown() {
     assert_commit_is_ancestor "$new_br1_sha" br2
     local new_br2_sha; new_br2_sha=$(git rev-parse br2)
     assert_commit_is_ancestor "$new_br2_sha" br3
+}
+
+# --- Tests for 'gss restack' ---
+@test "restack: rebases child branches after an amend" {
+    # This is the primary use case for `restack`. After amending a commit on a
+    # parent branch, the child branches need to be rebased on top of the new commit.
+    
+    # Setup
+    create_stack feature-a feature-b feature-c
+    run git checkout feature-b
+    # Amend the commit on feature-b
+    run create_commit "new content for b" "amended content" "file-b.txt"
+    run git add .
+    run git commit --amend --no-edit
+    local new_b_sha; new_b_sha=$(git rev-parse HEAD)
+
+    # Action
+    run "$GSS_CMD" restack
+
+    # Assertions
+    assert_success
+    
+    # --- State Assertions ---
+    # 'feature-c' should now have the amended commit from 'feature-b' in its history.
+    assert_commit_is_ancestor "$new_b_sha" feature-c
+    assert_branch_parent feature-b feature-a
+    assert_branch_parent feature-c feature-b
+}
+
+@test "restack: works when run from the bottom of a stack" {
+    # This test ensures that if you amend the very first branch in a stack,
+    # `restack` will correctly update all subsequent branches.
+    
+    # Setup
+    create_stack feature-a feature-b feature-c
+    run git checkout feature-a
+    run create_commit "new content for a" "amended content" "file-a.txt"
+    run git add .
+    run git commit --amend --no-edit
+    local new_a_sha; new_a_sha=$(git rev-parse HEAD)
+
+    # Action
+    run "$GSS_CMD" restack
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    assert_commit_is_ancestor "$new_a_sha" feature-b
+    assert_commit_is_ancestor "$new_a_sha" feature-c
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-a" # Should return to original branch
+}
+
+@test "restack: does nothing when at the top of the stack" {
+    # If `restack` is run from the topmost branch, there are no children
+    # to rebase, so it should do nothing and exit gracefully.
+    
+    # Setup
+    create_stack feature-a feature-b
+    local sha_a_before; sha_a_before=$(git rev-parse feature-a)
+    local sha_b_before; sha_b_before=$(git rev-parse feature-b)
+    run git checkout feature-b
+
+    # Action
+    run "$GSS_CMD" restack
+
+    # Assertions
+    assert_success
+    assert_output --partial "Stack is internally consistent. Nothing to restack."
+
+    # --- State Assertions ---
+    # Hashes should not have changed.
+    local sha_a_after; sha_a_after=$(git rev-parse feature-a)
+    local sha_b_after; sha_b_after=$(git rev-parse feature-b)
+    assert_equal "$sha_a_before" "$sha_a_after"
+    assert_equal "$sha_b_before" "$sha_b_after"
+}
+
+@test "restack: handles rebase conflict gracefully" {
+    # Similar to the 'sync' conflict test, this ensures that if a `restack`
+    # operation causes a merge conflict, the script pauses and allows the user
+    # to resolve it manually.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run git checkout feature-b
+    run create_commit "conflicting commit" "line 2" "conflict.txt"
+    run git checkout feature-a
+    # Amend feature-a to create a conflict
+    run create_commit "conflicting amend" "line two" "conflict.txt"
+    run git add .
+    run git commit --amend --no-edit
+
+    # Action
+    run "$GSS_CMD" restack
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "Rebase conflict detected"
+
+    # --- State Assertions ---
+    assert [ -f ".git/GSS_OPERATION_STATE" ]
+    run cat ".git/GSS_OPERATION_STATE"
+    assert_output --partial "\"command\": \"restack\""
+    assert_output --partial "\"originalBranch\": \"feature-a\""
+}
+
+@test "restack: 'continue' resumes after a restack conflict" {
+    # This tests the second half of the 'restack' conflict workflow.
+    
+    # Setup
+    create_stack feature-a feature-b
+    run git checkout feature-b
+    run create_commit "conflicting commit" "line 2" "conflict.txt"
+    run git checkout feature-a
+    run create_commit "conflicting amend" "line two" "conflict.txt"
+    run git add .
+    run git commit --amend --no-edit
+    local new_a_sha; new_a_sha=$(git rev-parse HEAD)
+    # Run restack, which is expected to fail
+    run "$GSS_CMD" restack
+
+    # Manual conflict resolution
+    echo "resolved" > conflict.txt
+    run git add conflict.txt
+    GIT_EDITOR=true run git rebase --continue
+
+    # Action
+    run "$GSS_CMD" continue
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    refute [ -f ".git/GSS_OPERATION_STATE" ]
+    assert_commit_is_ancestor "$new_a_sha" feature-b
+    run git rev-parse --abbrev-ref HEAD
+    assert_output "feature-a" # Should return to original branch
+}
+
+@test "restack: handles branch that becomes empty after rebase" {
+    # This tests what happens if an amend on a parent branch makes a child
+    # branch's commit redundant. The rebase should make the child branch
+    # "empty" (i.e., point to the same commit as its parent). The script should
+    # warn the user about this and continue to rebase subsequent branches correctly.
+    
+    # Setup
+    # 1. Create the stack structure without initial commits from the helper.
+    run "$GSS_CMD" create feature-a
+    run "$GSS_CMD" create feature-b
+    run "$GSS_CMD" create feature-c
+    run git checkout feature-b
+
+    # 2. Create the specific commit on feature-b that will be made redundant.
+    run create_commit "add file-b" "content" "file-b.txt"
+
+    # 3. Create a normal commit on feature-c.
+    run git checkout feature-c
+    run create_commit "add file-c" "content" "file-c.txt"
+    
+    # 4. Go back to feature-a and add a commit with the *exact same changes* as feature-b.
+    run git checkout feature-a
+    run create_commit "add file-b on parent" "content" "file-b.txt"
+    local new_a_sha; new_a_sha=$(git rev-parse HEAD)
+
+    # Action
+    run "$GSS_CMD" restack
+
+    # Assertions
+    assert_success
+
+    # --- State Assertions ---
+    # feature-b should now point to the same commit as the new feature-a.
+    local new_b_sha; new_b_sha=$(git rev-parse feature-b)
+    assert_equal "$new_a_sha" "$new_b_sha"
+    # feature-c should be rebased on top of the (now empty) feature-b.
+    assert_commit_is_ancestor "$new_b_sha" feature-c
 }

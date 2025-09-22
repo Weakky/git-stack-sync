@@ -1,0 +1,37 @@
+{
+  "name": "git-stack-sync",
+  "version": "0.0.1",
+  "description": "A CLI for managing stacked Git branches.",
+  "main": "dist/index.js",
+  "bin": {
+    "gss": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/weakky/git-stack-sync.git"
+  },
+  "scripts": {
+    "build": "ncc build gss.ts -o dist -m",
+    "prepublishOnly": "npm run build",
+    "publish:npm": "npm publish",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "git",
+    "stack",
+    "cli"
+  ],
+  "author": "weakky",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "zx": "^7.2.3"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1",
+    "typescript": "^5.3.3"
+  }
+}

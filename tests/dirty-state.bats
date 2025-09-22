@@ -4,16 +4,17 @@ load 'bats-support/load'
 load 'bats-assert/load'
 load 'test_helper'
 
-# --- Variables ---
-GSS_CMD_BASE="$BATS_TEST_DIRNAME/../gss"
+# --- Variables and Pre-run Checks ---
+GSS_CMD_BASE="$BATS_TEST_DIRNAME/../dist/index"
 GSS_CMD=""
 
+# Auto-detect whether the script is named 'gss' or 'gss.sh'
 if [[ -f "$GSS_CMD_BASE" ]]; then
     GSS_CMD="$GSS_CMD_BASE"
-elif [[ -f "${GSS_CMD_BASE}.sh" ]]; then
-    GSS_CMD="${GSS_CMD_BASE}.sh"
+elif [[ -f "${GSS_CMD_BASE}.js" ]]; then
+    GSS_CMD="${GSS_CMD_BASE}.js"
 else
-    echo "🔴 Error: Could not find the gss script." >&2
+    echo "🔴 Error: Could not find the gss script. Looked for '$GSS_CMD_BASE' and '${GSS_CMD_BASE}.sh'." >&2
     exit 1
 fi
 export PATH="$BATS_TEST_DIRNAME/mocks:$PATH"
@@ -196,15 +197,15 @@ create_untracked_file() {
     assert_output --partial "Command cannot run with uncommitted changes"
 }
 
-@test "track remove: works with dirty state" {
+@test "untrack: works with dirty state" {
     # Setup
     run "$GSS_CMD" create feature-a
     create_dirty_state
 
     # Action
-    # This should fail because 'track remove' now has the guard.
+    # This should fail because 'untrack' now has the guard.
     # We are not creating unique commits, so the *other* guard won't trigger.
-    run "$GSS_CMD" track remove
+    run "$GSS_CMD" untrack
 
     # Assertions
     assert_success
