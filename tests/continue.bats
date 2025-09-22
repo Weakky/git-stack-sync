@@ -325,4 +325,3 @@ teardown() {
     assert_success
     assert_output --partial "No gss operation to continue. Nothing to do."
 }
-

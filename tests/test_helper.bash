@@ -15,7 +15,7 @@ setup_git_repo() {
     git init -b main "$test_dir/local" >/dev/null 2>&1
     
     # 2. Navigate into the local repository.
-    cd "$test_dir/local"
+    cd "$test_dir/local" || exit 1
 
     # 3. Configure the repository for testing.
     git config user.email "test@example.com"
@@ -92,7 +92,7 @@ get_all_branch_shas() {
 assert_branch_parent() {
     local child_branch=$1
     local expected_parent=$2
-    local git_root=$(git rev-parse --show-toplevel)
+    local git_root; git_root=$(git rev-parse --show-toplevel)
     
     # Parse gss config using jq
     run jq -r ".branchParents[\"$child_branch\"]" "$git_root/.git/GSS_CONFIG_CACHE"
