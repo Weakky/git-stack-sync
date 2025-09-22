@@ -1215,8 +1215,8 @@ async function cmdTrack(args: string[]) {
   const branchFlagIndex = args.findIndex((arg) => arg === "--parent");
 
   if (prFlagIndex !== -1 && branchFlagIndex !== -1) {
-    logError("Cannot use both --pr and --branch flags together.");
-    logSuggestion("Usage: gss track [--pr <number>] [--branch [parent]]");
+    logError("Cannot use both --pr and --parent flags together.");
+    logSuggestion("Usage: gss track [--pr <number>] [--parent [parent]]");
     process.exit(1);
   }
 

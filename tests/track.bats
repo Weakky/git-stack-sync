@@ -84,3 +84,150 @@ teardown() {
     assert_output --partial "parent-branch (2 branches)"
     refute_output --partial "child-a"
 }
+
+# --- Tests for 'gss track --pr' ---
+
+@test "track --pr: successfully tracks an open PR" {
+    # SCENARIO: The standard happy path. The current branch and its parent
+    # match the PR's head and base refs.
+    
+    # Setup
+    run "$GSS_CMD" create feature-a
+    run create_commit "feat: add feature a"
+    # Mock PR #42 with head=feature-a and base=main
+    mock_pr_state 42 OPEN main feature-a
+
+    # Action
+    run "$GSS_CMD" track --pr 42
+    
+    # Assertions
+    assert_success
+    assert_output --partial "'feature-a' associated with PR #42"
+
+    # --- State Assertions ---
+    assert_branch_pr_number feature-a 42
+}
+
+@test "track --pr: succeeds when branch has no parent yet" {
+    # SCENARIO: A branch exists locally but is not yet part of a gss stack.
+    # Tracking by PR should succeed as long as the head ref matches. The
+    # parent relationship is not enforced if it doesn't exist locally.
+    
+    # Setup
+    run git checkout -b feature-untracked
+    run create_commit "feat: untracked feature"
+    # Mock PR #43 where the head is our untracked branch
+    mock_pr_state 43 OPEN main feature-untracked
+
+    # Action
+    run "$GSS_CMD" track --pr 43
+
+    # Assertions
+    assert_success
+    assert_output --partial "'feature-untracked' associated with PR #43"
+
+    # --- State Assertions ---
+    assert_branch_pr_number feature-untracked 43
+    # The parent should NOT have been set automatically.
+    run jq -r ".branchParents[\"feature-untracked\"]" "$BATS_TEST_TMPDIR/local/.git/GSS_CONFIG_CACHE"
+    assert_output "null"
+}
+
+@test "track --pr: fails if --pr and --parent are used together" {
+    # SCENARIO: The user provides both mutually exclusive flags.
+    run "$GSS_CMD" create feature-a
+    
+    # Action
+    run "$GSS_CMD" track --pr 42 --parent main
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "Cannot use both --pr and --parent flags together"
+
+    # --- State Assertions ---
+    assert_branch_has_no_pr_number feature-a
+}
+
+@test "track --pr: fails if PR number is not a number" {
+    run "$GSS_CMD" create feature-a
+    
+    # Action
+    run "$GSS_CMD" track --pr "not-a-number"
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "A valid PR number is required"
+    assert_branch_has_no_pr_number feature-a
+}
+
+@test "track --pr: fails if PR number is zero or negative" {
+    run "$GSS_CMD" create feature-a
+    
+    # Action
+    run "$GSS_CMD" track --pr 0
+    assert_failure
+    assert_output --partial "A valid PR number is required"
+
+    run "$GSS_CMD" track --pr -10
+    assert_failure
+    assert_output --partial "A valid PR number is required"
+
+    # --- State Assertions ---
+    assert_branch_has_no_pr_number feature-a
+}
+
+@test "track --pr: fails if PR is closed" {
+    run "$GSS_CMD" create feature-a
+    mock_pr_state 44 CLOSED main feature-a
+
+    # Action
+    run "$GSS_CMD" track --pr 44
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "PR #44 is CLOSED. Cannot track a closed PR."
+    assert_branch_has_no_pr_number feature-a
+}
+
+@test "track --pr: fails if PR is merged" {
+    run "$GSS_CMD" create feature-a
+    mock_pr_state 45 MERGED main feature-a
+    
+    # Action
+    run "$GSS_CMD" track --pr 45
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "PR #45 is MERGED. Cannot track a closed PR."
+    assert_branch_has_no_pr_number feature-a
+}
+
+@test "track --pr: fails if PR head branch does not match current branch" {
+    # SCENARIO: The user is on 'feature-a' but tries to track a PR
+    # whose head branch is 'some-other-branch'.
+    run "$GSS_CMD" create feature-a
+    mock_pr_state 46 OPEN main some-other-branch
+    
+    # Action
+    run "$GSS_CMD" track --pr 46
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "Current branch 'feature-a' does not match PR head 'some-other-branch'"
+    assert_branch_has_no_pr_number feature-a
+}
+
+@test "track --pr: fails if PR base branch does not match tracked parent" {
+    # SCENARIO: The user is on 'feature-b' whose parent is tracked as 'feature-a',
+    # but the PR's base is 'main'. This is a state mismatch that should be prevented.
+    create_stack feature-a feature-b
+    mock_pr_state 47 OPEN main feature-b
+    
+    # Action
+    run "$GSS_CMD" track --pr 47
+    
+    # Assertions
+    assert_failure
+    assert_output --partial "Current parent 'feature-a' does not match PR base 'main'"
+    assert_branch_has_no_pr_number feature-b
+}
