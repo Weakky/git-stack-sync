@@ -37,12 +37,12 @@ increment_file_number() {
     echo "$((number + 1))" > "$filename"
 }
 
-./gss.sh create br1
+./dist/index.js create br1
 increment_file_number file1
 git commit -am "increment file1"
 git push origin br1
-./gss.sh create br2
+./dist/index.js create br2
 increment_file_number file1
 git commit -am "increment file1"
 git push origin br2
-./gss.sh submit
+./dist/index.js submit
