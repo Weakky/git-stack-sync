@@ -54,7 +54,7 @@ teardown() {
     cleanup_mock_gh_state
 }
 
-@test "track remove: correctly updates cache with forked branches (REGRESSION)" {
+@test "untrack: correctly updates cache with forked branches (REGRESSION)" {
     # This tests a specific cache invalidation bug.
     # If a parent has multiple children (a forked stack), untracking one child
     # should not cause the other child's relationship to be removed from the cache.
@@ -69,7 +69,7 @@ teardown() {
     # Action: Untrack child-a. Since there are no commits, this will succeed.
     # The fix in `unset_parent_branch` ensures this only removes the 'parent -> child-a'
     # link from the cache, leaving 'parent -> child-b' intact.
-    run "$GSS_CMD" track remove
+    run "$GSS_CMD" untrack
 
     # Assertions
     assert_success

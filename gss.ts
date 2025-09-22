@@ -1208,65 +1208,61 @@ async function cmdPr() {
   }
 }
 
-async function cmdTrack(subcommand?: string, parent?: string) {
+async function cmdTrack(parent?: string) {
   const currentBranch = await getCurrentBranch();
+  const parentBranch = parent || config.baseBranch;
 
-  if (subcommand === "set") {
-    const parentBranch = parent || config.baseBranch;
-    try {
-      await $`git rev-parse --verify ${parentBranch}`;
-    } catch {
-      logError(`Parent branch '${parentBranch}' does not exist.`);
-      process.exit(1);
-    }
-    try {
-      await $`git merge-base --is-ancestor ${parentBranch} ${currentBranch}`;
-    } catch {
-      logError(
-        `Invalid parent: '${parentBranch}' is not an ancestor of '${currentBranch}'.`
-      );
-      process.exit(1);
-    }
-    await setParentBranch(currentBranch, parentBranch);
-    logSuccess(`Set parent of '${currentBranch}' to '${parentBranch}'.`);
-  } else if (subcommand === "remove") {
-    await guardContext("track remove");
-    const parentBranch = getParentBranch(currentBranch);
-
-    if (!parentBranch) {
-      logError(`Branch '${currentBranch}' is not tracked or has no parent.`);
-      process.exit(1);
-    }
-
-    // Safeguard: only allow removal if the branch has no unique commits.
-    const commitCount = parseInt(
-      (await $`git rev-list --count ${parentBranch}..${currentBranch}`).stdout
-    );
-    if (commitCount > 0) {
-      logError(
-        `Cannot untrack '${currentBranch}' because it contains unique commits.`
-      );
-      logSuggestion("Consider running 'gss squash' to integrate its changes.");
-      process.exit(1);
-    }
-
-    const childBranch = getChildBranch(currentBranch);
-
-    delete config.branchParents[currentBranch];
-    if (childBranch) {
-      logInfo(
-        `Reparing stack: setting parent of ${childBranch} to ${parentBranch}`
-      );
-      config.branchParents[childBranch] = parentBranch;
-    }
-
-    await writeGssConfig();
-    logSuccess(`Stopped tracking '${currentBranch}'.`);
-  } else {
-    logError(`A sub-command is required for 'track'.`);
-    logInfo("Usage: gss track <set|remove> [options]");
+  try {
+    await $`git rev-parse --verify ${parentBranch}`;
+  } catch {
+    logError(`Parent branch '${parentBranch}' does not exist.`);
     process.exit(1);
   }
+  try {
+    await $`git merge-base --is-ancestor ${parentBranch} ${currentBranch}`;
+  } catch {
+    logError(
+      `Invalid parent: '${parentBranch}' is not an ancestor of '${currentBranch}'.`
+    );
+    process.exit(1);
+  }
+  await setParentBranch(currentBranch, parentBranch);
+  logSuccess(`Set parent of '${currentBranch}' to '${parentBranch}'.`);
+}
+
+async function cmdUntrack() {
+  const currentBranch = await getCurrentBranch();
+  const parentBranch = getParentBranch(currentBranch);
+
+  if (!parentBranch) {
+    logError(`Branch '${currentBranch}' is not tracked or has no parent.`);
+    process.exit(1);
+  }
+
+  // Safeguard: only allow removal if the branch has no unique commits.
+  const commitCount = parseInt(
+    (await $`git rev-list --count ${parentBranch}..${currentBranch}`).stdout
+  );
+  if (commitCount > 0) {
+    logError(
+      `Cannot untrack '${currentBranch}' because it contains unique commits.`
+    );
+    logSuggestion("Consider running 'gss squash' to integrate its changes.");
+    process.exit(1);
+  }
+
+  const childBranch = getChildBranch(currentBranch);
+
+  delete config.branchParents[currentBranch];
+  if (childBranch) {
+    logInfo(
+      `Reparing stack: setting parent of ${childBranch} to ${parentBranch}`
+    );
+    config.branchParents[childBranch] = parentBranch;
+  }
+
+  await writeGssConfig();
+  logSuccess(`Stopped tracking '${currentBranch}'.`);
 }
 
 async function cmdInsert(
@@ -1488,8 +1484,9 @@ Options:
 
 Stack & Branch Management:
   create <branch-name>   Create a new branch on top of the current one.
-  track <set|remove> [parent]
-                         Manually manage stack metadata.
+  track [parent]         Track the current branch. If no parent is given, uses the base branch.
+  untrack                Untrack the current branch. Child branch will be reparented.
+                         
   insert [--before] <name>
                          Insert a new branch into the stack.
   squash [--into parent|child]
@@ -1498,10 +1495,10 @@ Stack & Branch Management:
   down                   Navigate to the parent branch in the stack.
 
 History & Synchronization:
-  amend                  Amend staged changes and restack descendants.
-  restack                Update branches above after history changes.
   sync                   Syncs stack with base branch and cleans up merged branches.
+  restack                Update branches above after history changes.
   push                   Force-push all branches in the current stack to the remote.
+  amend                  Amend staged changes and restack descendants.
   continue               Resume an operation after a rebase conflict.
 
 Inspection & GitHub:
@@ -1591,7 +1588,10 @@ async function main() {
       await cmdPr();
       break;
     case "track":
-      await cmdTrack(commandArgs[0], commandArgs[1]);
+      await cmdTrack(commandArgs[0]);
+      break;
+    case "untrack":
+      await cmdUntrack();
       break;
     case "insert":
       const before = commandArgs.includes("--before");
