@@ -9,10 +9,9 @@ if [[ ! -f "$PR_COUNTER_FILE" ]]; then
     echo 20 > "$PR_COUNTER_FILE" # Start PR numbers at 20
 fi
 
-
 # --- MOCK BEHAVIOR ---
 if [[ "$1" == "repo" && "$2" == "view" ]]; then
-    echo '{ "owner": "test-user", "name": "test-repo", "base": "main" }'
+    echo '{ "owner": { "id": "123", "login": "test-user" }, "name": "test-repo", "defaultBranchRef": { "name": "main" } }'
     exit 0
 
 elif [[ "$1" == "auth" && "$2" == "status" ]]; then
