@@ -8,11 +8,11 @@ $.verbose = false;
 interface GssState {
   command: string;
   originalBranch: string;
+  // Specific to 'sync'
   mergedBranchesToDelete?: string[];
-  unmergedBranches?: string[];
-  branchesToRestack?: string[];
-  restackStartBranch?: string;
-  finalBase?: string;
+  branchesInvolvedInRebase?: string[];
+  newBaseForRebasedStack?: string;
+  initialShas?: Record<string, string>;
 }
 
 // --- Configuration & State ---
@@ -191,6 +191,24 @@ async function getFullStack(): Promise<string[]> {
   }
 
   return stack;
+}
+
+/**
+ * Gets the current commit SHA for a list of branches.
+ */
+async function getBranchShas(
+  branches: string[]
+): Promise<Record<string, string>> {
+  const shas: Record<string, string> = {};
+  for (const branch of branches) {
+    try {
+      shas[branch] = (await $`git rev-parse ${branch}`).stdout.trim();
+    } catch {
+      logError(`Could not find branch '${branch}' to get its SHA. Aborting.`);
+      process.exit(1);
+    }
+  }
+  return shas;
 }
 
 async function getPrNumber(branch: string): Promise<number | null> {
@@ -406,6 +424,46 @@ async function executeRebaseOperation(options: {
 }
 
 // --- Initialization ---
+
+/**
+ * Checks for a pending gss operation and prevents other commands from running.
+ */
+async function guardPendingOperation(command: string | undefined) {
+  // Allow certain commands to run even if a pending operation exists.
+  if (["continue", "clean", "help", "--help", "-h"].includes(command || "")) {
+    return;
+  }
+
+  const stateFileExists = await fs.exists(stateFile);
+  if (!stateFileExists) {
+    return; // No pending operation.
+  }
+
+  // A state file exists, so an operation is pending.
+  // We need to guide the user to resolve it.
+  const rebaseInProgress = await fs.exists(
+    path.join(gitRoot, ".git", "rebase-merge")
+  );
+
+  if (rebaseInProgress) {
+    logError("A gss operation is paused because of a Git rebase conflict.");
+    logSuggestion(
+      "First, resolve the conflicts and run 'git rebase --continue'."
+    );
+    logSuggestion(
+      "Once the rebase is complete, run 'gss continue' to finalize the operation."
+    );
+  } else {
+    logError("A previous gss operation is pending completion.");
+    logInfo(
+      "This can happen if a rebase succeeded or was aborted, but was not finalized."
+    );
+    logSuggestion("Run 'gss continue' to finalize and clean up the operation.");
+  }
+
+  process.exit(1);
+}
+
 async function initializeConfig() {
   const storedConfig = await readGssConfig();
 
@@ -720,12 +778,15 @@ async function cmdSync() {
 
     await $`git checkout ${topBranch}`;
 
+    const initialShas = await getBranchShas(unmergedBranches);
+
     const state: GssState = {
       command: "sync",
       originalBranch,
       mergedBranchesToDelete: mergedBranches,
-      unmergedBranches,
-      finalBase: config.baseBranch,
+      branchesInvolvedInRebase: unmergedBranches,
+      newBaseForRebasedStack: config.baseBranch,
+      initialShas,
     };
 
     await executeRebaseOperation({
@@ -961,21 +1022,69 @@ async function cmdContinue() {
     return;
   }
 
-  logStep(`Resuming '${state.command}' operation...`);
-  if (state.command === "sync" && state.unmergedBranches && state.finalBase) {
-    await repairStackMetadata(state.finalBase, state.unmergedBranches);
+  const {
+    branchesInvolvedInRebase,
+    newBaseForRebasedStack,
+    initialShas,
+    command,
+  } = state;
+  let rebaseSucceeded = false;
+
+  // If there were no branches to rebase (e.g., sync with only merged branches), the operation is considered successful.
+  if (!branchesInvolvedInRebase || branchesInvolvedInRebase.length === 0) {
+    rebaseSucceeded = true;
+  } else if (initialShas) {
+    // SAFETY: We checked above that branchesInvolvedInRebase is non-empty
+    const firstBranch = branchesInvolvedInRebase[0]!;
+    const initialSha = initialShas[firstBranch];
+
+    let currentSha: string | null = null;
+    try {
+      currentSha = (await $`git rev-parse ${firstBranch}`).stdout.trim();
+    } catch {
+      // Branch doesn't exist. Can't compare, assume failure for safety.
+      currentSha = null;
+    }
+
+    if (initialSha && currentSha && initialSha !== currentSha) {
+      rebaseSucceeded = true;
+    }
   }
-  if (
-    state.command === "restack" &&
-    state.branchesToRestack &&
-    state.restackStartBranch
-  ) {
-    await repairStackMetadata(
-      state.restackStartBranch,
-      state.branchesToRestack
+
+  if (rebaseSucceeded) {
+    logStep(`Resuming '${command}' operation...`);
+    if (branchesInvolvedInRebase && newBaseForRebasedStack) {
+      await repairStackMetadata(
+        newBaseForRebasedStack,
+        branchesInvolvedInRebase
+      );
+    }
+    await finishOperation();
+  } else {
+    logWarning(
+      "Detected that the previous Git rebase was likely aborted or failed."
     );
+    logInfo(
+      "The operation was not completed, and no metadata has been changed."
+    );
+
+    // We still need to clean up the state file and return to the original branch,
+    // but without performing the riskier parts of finishOperation (like deleting branches).
+    try {
+      await $`git rev-parse --verify ${state.originalBranch}`;
+      if ((await getCurrentBranch()) !== state.originalBranch) {
+        logInfo(`Returning to original branch '${state.originalBranch}'.`);
+        await $`git checkout ${state.originalBranch}`;
+      }
+    } catch {
+      logWarning(
+        `Original branch '${state.originalBranch}' no longer exists. Returning to '${config.baseBranch}'.`
+      );
+      await $`git checkout ${config.baseBranch}`;
+    }
+    await clearState();
+    logSuccess("Pending operation has been cleaned up.");
   }
-  await finishOperation();
 }
 
 async function cmdClean() {
@@ -1058,11 +1167,14 @@ async function cmdRestack() {
 
   await $`git checkout ${topBranch}`;
 
+  const initialShas = await getBranchShas(branchesToRestack);
+
   const state: GssState = {
     command: "restack",
     originalBranch,
-    branchesToRestack,
-    restackStartBranch: divergencePoint,
+    branchesInvolvedInRebase: branchesToRestack,
+    newBaseForRebasedStack: divergencePoint,
+    initialShas,
   };
 
   await executeRebaseOperation({
@@ -1422,6 +1534,8 @@ async function main() {
 
   const command = args[0];
   const commandArgs = args.slice(1);
+
+  await guardPendingOperation(command);
 
   if (command && !["clean", "help", "--help", "-h"].includes(command)) {
     await initializeConfig();
