@@ -6,8 +6,17 @@
   "bin": {
     "gss": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/weakky/git-stack-sync.git"
+  },
   "scripts": {
     "build": "ncc build gss.ts -o dist -m",
+    "prepublishOnly": "npm run build",
+    "publish:npm": "npm publish",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -15,8 +24,8 @@
     "stack",
     "cli"
   ],
-  "author": "",
-  "license": "ISC",
+  "author": "weakky",
+  "license": "MIT",
   "dependencies": {
     "chalk": "^5.3.0",
     "zx": "^7.2.3"
@@ -26,4 +35,3 @@
     "typescript": "^5.3.3"
   }
 }
-
