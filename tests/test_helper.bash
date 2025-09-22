@@ -92,7 +92,10 @@ get_all_branch_shas() {
 assert_branch_parent() {
     local child_branch=$1
     local expected_parent=$2
-    run git config --get "branch.${child_branch}.parent"
+    local git_root=$(git rev-parse --show-toplevel)
+    
+    # Parse gss config using jq
+    run jq -r ".branchParents[\"$child_branch\"]" "$git_root/.git/GSS_CONFIG_CACHE"
     assert_success
     assert_output "$expected_parent"
 }

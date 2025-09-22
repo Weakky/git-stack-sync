@@ -15,16 +15,27 @@ interface GssState {
   finalBase?: string;
 }
 
-// --- State and Configuration ---
+// --- Configuration & State ---
+// This interface defines the structure of our new JSON config file.
+interface GssConfig {
+  baseBranch: string;
+  ghUser: string;
+  ghRepo: string;
+  /** A map where the key is the child branch and the value is its parent. */
+  branchParents: Record<string, string>;
+}
+
 let gitRoot: string;
 let stateFile: string;
-let configCacheFile: string;
+let gssConfigFile: string;
 let autoConfirm = false;
 
-const config = {
+// The single, in-memory configuration object for the application.
+const config: GssConfig = {
   baseBranch: "",
   ghUser: "",
   ghRepo: "",
+  branchParents: {},
 };
 
 // --- Logging Helpers ---
@@ -50,6 +61,26 @@ function logStep(message: string) {
 
 function logSuggestion(message: string) {
   console.log(`💡 Next step: ${message}`);
+}
+
+/**
+ * Reads the GSS configuration from the JSON file in .git directory.
+ */
+async function readGssConfig(): Promise<Partial<GssConfig>> {
+  try {
+    const content = await fs.readFile(gssConfigFile, "utf-8");
+    return JSON.parse(content);
+  } catch {
+    // File doesn't exist or is invalid, return empty object.
+    return {};
+  }
+}
+
+/**
+ * Writes the entire in-memory GSS configuration to the JSON file.
+ */
+async function writeGssConfig(): Promise<void> {
+  await fs.writeFile(gssConfigFile, JSON.stringify(config, null, 2));
 }
 
 // --- Git & System Helpers ---
@@ -97,38 +128,58 @@ async function getCurrentBranch(): Promise<string> {
   return (await $`git rev-parse --abbrev-ref HEAD`).stdout.trim();
 }
 
-async function getParentBranch(branch: string): Promise<string> {
-  try {
-    return (await $`git config --get branch.${branch}.parent`).stdout.trim();
-  } catch {
-    return "";
-  }
+/**
+ * Gets the parent of a branch from the JSON config.
+ */
+function getParentBranch(branch: string): string | undefined {
+  return config.branchParents[branch];
 }
 
-async function getChildBranches(parentBranch: string): Promise<string[]> {
-  try {
-    const configLines = (
-      await $`git config --get-regexp ^branch\\..*\\.parent$`
-    ).stdout.trim();
+/**
+ * Gets child of a branch from the JSON config.
+ */
+function getChildBranch(parentBranch: string): string | null {
+  let children = Object.keys(config.branchParents).filter(
+    (child) => config.branchParents[child] === parentBranch
+  );
 
-    return configLines
-      .split("\n")
-      .filter((line) => line.endsWith(` ${parentBranch}`))
-      .map((line) => line.match(/^branch\.(.*)\.parent/)?.[1] || "")
-      .filter(Boolean);
-  } catch {
-    return [];
+  if (children.length === 0 || !children[0]) {
+    return null;
   }
+
+  if (children.length > 1) {
+    logError(
+      `Branch '${parentBranch}' has multiple children: ${children.join(", ")}`
+    );
+    process.exit(1);
+  }
+
+  return children[0];
+}
+
+/**
+ * Sets the parent of a branch and saves to the JSON config file.
+ */
+async function setParentBranch(childBranch: string, parentBranch: string) {
+  config.branchParents[childBranch] = parentBranch;
+  await writeGssConfig();
+}
+
+/**
+ * Removes a branch's parent entry and saves to the JSON config file.
+ */
+async function unsetParentBranch(childBranch: string) {
+  delete config.branchParents[childBranch];
+  await writeGssConfig();
 }
 
 async function getStackTop(): Promise<string> {
   let currentBranch = await getCurrentBranch();
-
   while (true) {
-    // In a forked stack, this will just pick the first child it finds.
-    const children = await getChildBranches(currentBranch);
-    if (children.length > 0 && children[0] !== undefined) {
-      currentBranch = children[0];
+    const child = getChildBranch(currentBranch);
+
+    if (child !== null) {
+      currentBranch = child;
     } else {
       break;
     }
@@ -140,26 +191,14 @@ async function getFullStack(): Promise<string[]> {
   const top = await getStackTop();
   const stack: string[] = [];
 
-  let current: string | null = top;
+  let current: string | undefined = top;
 
   while (current && current !== config.baseBranch) {
     stack.unshift(current);
-    current = await getParentBranch(current);
+    current = getParentBranch(current);
   }
 
   return stack;
-}
-
-async function setParentBranch(childBranch: string, parentBranch: string) {
-  await $`git config branch.${childBranch}.parent ${parentBranch}`;
-}
-
-async function unsetParentBranch(childBranch: string) {
-  try {
-    await $`git config --unset branch.${childBranch}.parent`;
-  } catch {
-    // ignore if it doesn't exist
-  }
 }
 
 async function getPrNumber(branch: string): Promise<number | null> {
@@ -167,7 +206,6 @@ async function getPrNumber(branch: string): Promise<number | null> {
     const prNumberString = (
       await $`git config --get branch.${branch}.pr-number`
     ).stdout.trim();
-
     return Number(prNumberString);
   } catch {
     return null;
@@ -195,7 +233,7 @@ async function guardContext(commandName: string) {
     process.exit(1);
   }
 
-  const parent = await getParentBranch(currentBranch);
+  const parent = getParentBranch(currentBranch);
 
   if (!parent) {
     logError(`The '${commandName}' command requires a tracked branch.`);
@@ -230,9 +268,11 @@ async function repairStackMetadata(startParent: string, branches: string[]) {
   logStep("Updating gss parent metadata...");
   let currentParent = startParent;
   for (const branch of branches) {
-    await setParentBranch(branch, currentParent);
+    config.branchParents[branch] = currentParent;
     currentParent = branch;
   }
+  // Write all changes to the config file at once for efficiency
+  await writeGssConfig();
   logSuccess("Metadata repaired.");
 }
 
@@ -280,17 +320,14 @@ async function finishOperation() {
 
 // --- Initialization ---
 async function initializeConfig() {
-  try {
-    const cacheContent = await fs.readFile(configCacheFile, "utf-8");
-    const cache = JSON.parse(cacheContent);
-    if (cache.baseBranch && cache.ghUser && cache.ghRepo) {
-      config.baseBranch = cache.baseBranch;
-      config.ghUser = cache.ghUser;
-      config.ghRepo = cache.ghRepo;
-      return;
-    }
-  } catch (error) {
-    // Cache is invalid or doesn't exist, proceed to fetch
+  const storedConfig = await readGssConfig();
+
+  if (storedConfig.baseBranch && storedConfig.ghUser && storedConfig.ghRepo) {
+    config.baseBranch = storedConfig.baseBranch;
+    config.ghUser = storedConfig.ghUser;
+    config.ghRepo = storedConfig.ghRepo;
+    config.branchParents = storedConfig.branchParents || {};
+    return;
   }
 
   logStep("Initializing configuration (first run or cache is invalid)...");
@@ -306,13 +343,9 @@ async function initializeConfig() {
     config.ghUser = repoInfo.owner;
     config.ghRepo = repoInfo.name;
     config.baseBranch = repoInfo.base;
+    config.branchParents = storedConfig.branchParents || {};
 
-    const cachePayload = {
-      baseBranch: config.baseBranch,
-      ghUser: config.ghUser,
-      ghRepo: config.ghRepo,
-    };
-    await fs.writeFile(configCacheFile, JSON.stringify(cachePayload, null, 2));
+    await writeGssConfig();
     logSuccess("Configuration cached for future runs.");
   } catch (error) {
     logError("Could not determine GitHub repository context.");
@@ -356,15 +389,11 @@ async function cmdCreate(branchName?: string) {
 async function cmdUp() {
   await guardContext("up");
   await guardDirtyState();
-  const children = await getChildBranches(await getCurrentBranch());
-  if (children.length > 1) {
-    logWarning(
-      "Fork detected. Multiple child branches found. Checking out the first one."
-    );
-  }
-  if (children.length > 0) {
-    await $`git checkout ${children[0]}`;
-    logSuccess(`Checked out child branch: ${children[0]}`);
+  const child = getChildBranch(await getCurrentBranch());
+
+  if (child) {
+    await $`git checkout ${child}`;
+    logSuccess(`Checked out child branch: ${child}`);
   } else {
     logWarning("No child branch found. You are at the top of the stack.");
   }
@@ -373,7 +402,7 @@ async function cmdUp() {
 async function cmdDown() {
   await guardContext("down");
   await guardDirtyState();
-  const parent = await getParentBranch(await getCurrentBranch());
+  const parent = getParentBranch(await getCurrentBranch());
   if (parent) {
     await $`git checkout ${parent}`;
     logSuccess(`Checked out parent branch: ${parent}`);
@@ -393,7 +422,7 @@ async function cmdPush() {
     process.exit(1);
   }
 
-  console.log("Will force-push the following branches:");
+  logStep("Will force-push the following branches:");
   branchesToPush.forEach((b) => logInfo(b));
 
   if (await confirm("Are you sure?")) {
@@ -420,7 +449,7 @@ async function cmdSubmit() {
       continue;
     }
 
-    const parent = (await getParentBranch(branchName)) || config.baseBranch;
+    const parent = getParentBranch(branchName) || config.baseBranch;
     const commitCount = parseInt(
       (await $`git rev-list --count ${parent}..${branchName}`).stdout
     );
@@ -540,7 +569,7 @@ async function cmdSync() {
       `Your local base branch ('${config.baseBranch}') has diverged from the remote.`
     );
     logInfo(
-      "Please resolve this before running sync. A common cause is having local commits on '${config.baseBranch}'."
+      `Please resolve this before running sync. A common cause is having local commits on '${config.baseBranch}'.`
     );
     logSuggestion(
       `Consider running 'git checkout ${config.baseBranch} && git reset --hard origin/${config.baseBranch}'.`
@@ -593,7 +622,7 @@ async function cmdSync() {
     const topBranch = unmergedBranches[unmergedBranches.length - 1];
     // SAFETY: We check `unmergedBranches` length above
     const bottomBranch = unmergedBranches[0]!;
-    const oldBase = await getParentBranch(bottomBranch);
+    const oldBase = getParentBranch(bottomBranch);
 
     if (!oldBase) {
       logError(
@@ -643,47 +672,22 @@ async function cmdSync() {
 
 async function cmdList() {
   logStep("Finding all available stacks...");
-  let allConfigs = "";
 
-  try {
-    allConfigs = (
-      await $`git config --get-regexp '^branch\..*\.parent$'`
-    ).stdout.trim();
-  } catch (err: unknown) {
-    // Check if err is ProcessOutput
-    if (err instanceof ProcessOutput) {
-      // If it throws, check if it's the expected "not found" error
-      if (err.exitCode !== 1) {
-        // This is an unexpected error, so we should re-throw it.
-        throw err;
-      }
-    }
-  }
-
-  if (allConfigs.length === 0) {
+  const allParents = config.branchParents;
+  if (Object.keys(allParents).length === 0) {
     logWarning("No gss stacks found.");
+    logSuggestion(
+      `Run 'gss create <branch-name>' from '${config.baseBranch}' to start a stack.`
+    );
     return;
   }
 
   const childrenMap = new Map<string, string[]>();
-
-  allConfigs.split("\n").forEach((line) => {
-    const match = line.match(/^branch\.(.*)\.parent (.*)$/);
-
-    if (match) {
-      const child = match[1];
-      const parent = match[2];
-
-      if (!parent || !child) {
-        logError(`Unexpected metadata stored in git config. Found: '${line}'.`);
-        process.exit(1);
-      }
-
-      if (!childrenMap.has(parent)) {
-        childrenMap.set(parent, []);
-      }
-      childrenMap.get(parent)!.push(child);
+  Object.entries(allParents).forEach(([child, parent]) => {
+    if (!childrenMap.has(parent)) {
+      childrenMap.set(parent, []);
     }
+    childrenMap.get(parent)!.push(child);
   });
 
   const bottoms = childrenMap.get(config.baseBranch) || [];
@@ -698,9 +702,8 @@ async function cmdList() {
 
     while (true) {
       const children = childrenMap.get(currentBranch);
-
-      if (children && children[0] !== undefined) {
-        currentBranch = children[0];
+      if (children && children.length > 0) {
+        currentBranch = children[0]!;
         count += 1;
       } else {
         break;
@@ -708,11 +711,10 @@ async function cmdList() {
     }
 
     if (count > 1) {
-      if (foundStacks == 0) {
+      if (foundStacks === 0) {
         logSuccess("Found stack(s):");
       }
-
-      foundStacks += 1;
+      foundStacks++;
       logInfo(`- ${bottom} (${count} branches)`);
     }
   }
@@ -720,7 +722,7 @@ async function cmdList() {
   if (foundStacks == 0) {
     logWarning("No gss stacks found.");
     logSuggestion(
-      "Run 'gss create <branch-name>' from '$BASE_BRANCH' or an existing branch to start a new stack."
+      `Run 'gss create <branch-name>' from '${config.baseBranch}' or an existing branch to start a new stack.`
     );
   } else {
     logSuggestion(
@@ -763,7 +765,7 @@ async function cmdStatus() {
   } else if (baseAhead > 0) {
     baseStatus = `🟡 Ahead by ${baseAhead}`;
   }
-  console.log(`➡️  ${config.baseBranch} (${baseStatus})`);
+  logStep(`${config.baseBranch} (${baseStatus})`);
   console.log("");
 
   const prInfoMap = await fetchPRStates(stack);
@@ -776,9 +778,9 @@ async function cmdStatus() {
   const currentBranch = await getCurrentBranch();
 
   for (const branch of stack) {
-    const parentBranch = (await getParentBranch(branch)) || config.baseBranch;
+    const parentBranch = getParentBranch(branch) || config.baseBranch;
     const isCurrentBranch = currentBranch === branch ? " *" : "";
-    console.log(`➡️  ${branch}${isCurrentBranch} (parent: ${parentBranch})`);
+    logStep(`${branch}${isCurrentBranch} (parent: ${parentBranch})`);
 
     // --- Status Line ---
     let statusMessage = "";
@@ -820,9 +822,8 @@ async function cmdStatus() {
 
     // --- PR Line ---
     const prInfo = prInfoMap.get(branch);
-
     let prStatus = "";
-    if (prInfo && prInfo.prNumber) {
+    if (prInfo?.prNumber) {
       if (prInfo.state === "OPEN") {
         prStatus = `🟢 #${prInfo.prNumber}: OPEN - ${prInfo.url}`;
       } else if (prInfo.state === "MERGED") {
@@ -900,9 +901,11 @@ async function cmdContinue() {
 }
 
 async function cmdClean() {
-  logWarning("This will permanently delete all gss metadata (cache, state).");
+  logWarning(
+    "This will permanently delete the gss config file (cache, stacks)."
+  );
   if (await confirm("Are you sure?")) {
-    await fs.rm(configCacheFile, { force: true });
+    await fs.rm(gssConfigFile, { force: true });
     await fs.rm(stateFile, { force: true });
     logSuccess("gss metadata cleaned.");
   } else {
@@ -925,9 +928,9 @@ async function cmdAmend() {
   logWarning(`You are about to amend the last commit on '${currentBranch}'.`);
   logWarning("This will permanently change the commit history.");
 
-  const childBranches = await getChildBranches(currentBranch);
+  const childBranch = getChildBranch(currentBranch);
 
-  if (childBranches.length > 0) {
+  if (childBranch) {
     logInfo("Descendant branches will be rebased on top of the new commit.");
   }
 
@@ -954,16 +957,13 @@ async function cmdRestack() {
 
   // 1. Get the full ordered list of branches in the current stack.
   const fullStack = await getFullStack();
-
-  if (fullStack.length == 0) {
+  if (fullStack.length === 0) {
     logError("Empty stack found. Nothing to restack.");
     process.exit(1);
   }
 
   // SAFETY: `fullStack` length is checked above
-  let parentBranch =
-    (await getParentBranch(fullStack[0]!)) || config.baseBranch;
-
+  let parentBranch = getParentBranch(fullStack[0]!) || config.baseBranch;
   let restackStartBranch: string | null = null;
   const branchesToRestack: string[] = [];
   let divergenceFound = false;
@@ -1021,7 +1021,7 @@ async function cmdRestack() {
     for (let i = 1; i < numBranchesRebased; i++) {
       // i=1 corresponds to the 2nd branch from the top, which is at HEAD~1
       const branchToFixIndex = numBranchesRebased - 1 - i;
-      const branchToFix = branchesToRestack[branchToFixIndex];
+      const branchToFix = branchesToRestack[branchToFixIndex]!;
       const newCommitRef = `HEAD~${i}`;
       await $`git branch -f ${branchToFix} ${newCommitRef}`;
     }
@@ -1090,7 +1090,12 @@ async function cmdTrack(subcommand?: string, parent?: string) {
     logSuccess(`Set parent of '${currentBranch}' to '${parentBranch}'.`);
   } else if (subcommand === "remove") {
     await guardContext("track remove");
-    const parentBranch = await getParentBranch(currentBranch);
+    const parentBranch = getParentBranch(currentBranch);
+
+    if (!parentBranch) {
+      logError(`Branch '${currentBranch}' is not tracked or has no parent.`);
+      process.exit(1);
+    }
 
     // Safeguard: only allow removal if the branch has no unique commits.
     const commitCount = parseInt(
@@ -1104,16 +1109,20 @@ async function cmdTrack(subcommand?: string, parent?: string) {
       process.exit(1);
     }
 
-    await unsetParentBranch(currentBranch);
-    logSuccess(`Stopped tracking '${currentBranch}'.`);
-    const childBranches = await getChildBranches(currentBranch);
+    // Atomically update config: remove branch and re-parent children
+    delete config.branchParents[currentBranch];
 
-    for (const childBranch of childBranches) {
+    const childBranch = getChildBranch(currentBranch);
+
+    if (childBranch) {
       logInfo(
         `Reparing stack: setting parent of ${childBranch} to ${parentBranch}`
       );
-      setParentBranch(childBranch, parentBranch);
+      config.branchParents[childBranch] = parentBranch;
     }
+
+    await writeGssConfig();
+    logSuccess(`Stopped tracking '${currentBranch}'.`);
   } else {
     logError(`A sub-command is required for 'track'.`);
     logInfo("Usage: gss track <set|remove> [options]");
@@ -1134,11 +1143,11 @@ async function cmdInsert(
   await guardDirtyState();
 
   const currentBranch = await getCurrentBranch();
-  let insertionPoint: string;
-  let childToReparent: string | undefined;
+  let insertionPoint: string | undefined;
+  let childToReparent: string | null = null;
 
   if (before) {
-    insertionPoint = await getParentBranch(currentBranch);
+    insertionPoint = getParentBranch(currentBranch);
     if (!insertionPoint) {
       logError(
         `Cannot determine parent of '${currentBranch}'. Is it part of a stack?`
@@ -1149,7 +1158,7 @@ async function cmdInsert(
     logStep(`Preparing to insert '${branchName}' before '${currentBranch}'...`);
   } else {
     insertionPoint = currentBranch;
-    childToReparent = (await getChildBranches(currentBranch))[0];
+    childToReparent = getChildBranch(currentBranch);
     logStep(`Preparing to insert '${branchName}' after '${currentBranch}'...`);
   }
 
@@ -1191,21 +1200,28 @@ async function cmdSquash({ into }: { into?: "parent" | "child" } = {}) {
 
   const direction = into || "parent";
   const currentBranch = await getCurrentBranch();
-  const parentBranch = await getParentBranch(currentBranch);
-  const childBranches = await getChildBranches(currentBranch);
-  const childBranch = childBranches[0]; // Assuming no forks for squash
+  const parentBranch = getParentBranch(currentBranch);
+  const childBranch = getChildBranch(currentBranch);
 
-  let targetBranch: string | undefined;
-  let branchToSquash: string | undefined;
-  let grandChild: string | undefined;
+  let targetBranch: string;
+  let branchToSquash: string;
+  let grandChild: string | null;
 
   if (direction === "parent") {
+    if (!parentBranch) {
+      logError(
+        `Cannot squash into parent: branch '${currentBranch}' has no parent.`
+      );
+      process.exit(1);
+    }
+
     if (parentBranch === config.baseBranch) {
       logError(
         `Cannot squash the first branch of a stack into '${config.baseBranch}'.`
       );
       process.exit(1);
     }
+
     targetBranch = parentBranch;
     branchToSquash = currentBranch;
     grandChild = childBranch;
@@ -1214,9 +1230,10 @@ async function cmdSquash({ into }: { into?: "parent" | "child" } = {}) {
       logError("No child branch found to squash into.");
       process.exit(1);
     }
+
     targetBranch = currentBranch;
     branchToSquash = childBranch;
-    grandChild = (await getChildBranches(childBranch))[0];
+    grandChild = getChildBranch(childBranch);
   } else {
     logError(
       `Invalid direction for squash: '${direction}'. Must be 'parent' or 'child'.`
@@ -1258,7 +1275,7 @@ async function cmdSquash({ into }: { into?: "parent" | "child" } = {}) {
       logInfo(`     - ${branch}`);
     }
   });
-  console.log("");
+  console.log();
 
   if (!(await confirm("Are you sure you want to continue?"))) {
     logWarning("Squash cancelled.");
@@ -1373,7 +1390,7 @@ async function main() {
 
   gitRoot = root;
   stateFile = path.join(gitRoot, ".git", "GSS_OPERATION_STATE");
-  configCacheFile = path.join(gitRoot, ".git", "GSS_CONFIG_CACHE");
+  gssConfigFile = path.join(gitRoot, ".git", "GSS_CONFIG_CACHE");
 
   let args = process.argv.slice(2);
 
@@ -1461,10 +1478,14 @@ async function main() {
 }
 
 main().catch((err) => {
-  if (err.stderr) {
-    logError(err.stderr.trim());
-  } else {
+  if (err instanceof ProcessOutput) {
+    console.log(err.stdout);
+    console.error(err.stderr);
+  } else if (err instanceof Error) {
     logError(err.message);
+  } else {
+    logError("An unknown error occurred.");
+    console.error(err);
   }
   process.exit(1);
 });
