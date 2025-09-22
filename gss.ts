@@ -464,6 +464,15 @@ async function guardPendingOperation(command: string | undefined) {
   process.exit(1);
 }
 
+type RepoInfo = {
+  defaultBranchRef: { name: string };
+  name: string;
+  owner: {
+    id: string;
+    login: string;
+  };
+};
+
 async function initializeConfig() {
   const storedConfig = await readGssConfig();
 
@@ -477,17 +486,16 @@ async function initializeConfig() {
 
   logStep("Initializing configuration (first run or cache is invalid)...");
   try {
-    const { stdout } =
-      await $`gh repo view --json owner,name,defaultBranchRef --jq '{ "owner": .owner.login, "name": .name, "base": .defaultBranchRef.name }'`;
-    const repoInfo = JSON.parse(stdout);
+    const { stdout } = await $`gh repo view --json owner,name,defaultBranchRef`;
+    const repoInfo: RepoInfo = JSON.parse(stdout);
 
-    if (!repoInfo.owner || !repoInfo.name || !repoInfo.base) {
+    if (!repoInfo.owner || !repoInfo.name || !repoInfo.defaultBranchRef) {
       throw new Error("Failed to parse repository details from GitHub.");
     }
 
-    config.ghUser = repoInfo.owner;
+    config.ghUser = repoInfo.owner.login;
     config.ghRepo = repoInfo.name;
-    config.baseBranch = repoInfo.base;
+    config.baseBranch = repoInfo.defaultBranchRef.name;
     config.branchParents = storedConfig.branchParents || {};
 
     await writeGssConfig();
