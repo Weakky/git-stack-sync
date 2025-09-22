@@ -213,7 +213,7 @@ async function getBranchShas(
   return shas;
 }
 
-async function getPrNumber(branch: string): Promise<number | null> {
+function getPrNumber(branch: string): number | null {
   return config.branchPullRequests[branch] ?? null;
 }
 
@@ -487,6 +487,7 @@ async function initializeConfig() {
     config.ghUser = storedConfig.ghUser;
     config.ghRepo = storedConfig.ghRepo;
     config.branchParents = storedConfig.branchParents || {};
+    config.branchPullRequests = storedConfig.branchPullRequests || {};
     return;
   }
 
@@ -602,7 +603,7 @@ async function cmdSubmit() {
   const stack = await getFullStack();
 
   for (const branchName of stack) {
-    const prNumber = await getPrNumber(branchName);
+    const prNumber = getPrNumber(branchName);
 
     if (prNumber) {
       logInfo(`PR #${prNumber} already exists for branch '${branchName}'.`);
@@ -684,7 +685,7 @@ async function fetchPRStates(
   stack: string[]
 ): Promise<Map<string, GithubPRInfoResponse>> {
   const prStatusPromises = stack.map(async (branch) => {
-    const prNumber = await getPrNumber(branch);
+    const prNumber = getPrNumber(branch);
 
     if (!prNumber) {
       return {
@@ -1219,7 +1220,7 @@ async function cmdRestack() {
 async function cmdPr() {
   await guardContext("pr");
   await checkGhAuth();
-  const prNumber = await getPrNumber(await getCurrentBranch());
+  const prNumber = getPrNumber(await getCurrentBranch());
   if (prNumber) {
     logStep(`Opening PR #${prNumber} in browser...`);
     await $`gh pr view ${prNumber} --web`;
@@ -1323,7 +1324,7 @@ async function cmdInsert(
   logSuccess(`Created branch '${branchName}' on top of '${insertionPoint}'.`);
 
   if (childToReparent) {
-    const prNumber = await getPrNumber(childToReparent);
+    const prNumber = getPrNumber(childToReparent);
     if (prNumber) {
       logStep(`Updating GitHub PR for '${childToReparent}'...`);
       logInfo(`Pushing new branch '${branchName}' to remote...`);
@@ -1461,7 +1462,7 @@ async function cmdSquash({ into }: { into?: "parent" | "child" } = {}) {
   }
 
   // --- Cleanup and Metadata Repair ---
-  const prNumberToClose = await getPrNumber(branchToSquash);
+  const prNumberToClose = getPrNumber(branchToSquash);
   if (prNumberToClose) {
     if (
       await confirm(
