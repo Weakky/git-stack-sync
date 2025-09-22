@@ -217,9 +217,19 @@ async function getPrNumber(branch: string): Promise<number | null> {
   return config.branchPullRequests[branch] ?? null;
 }
 
-async function setPrNumber(branch: string, prNumber: string) {
-  config.branchPullRequests[branch] = Number(prNumber);
+async function setPrNumber(branch: string, prNumber: number) {
+  config.branchPullRequests[branch] = prNumber;
   await writeGssConfig();
+}
+
+async function readPrNumberFromGithub(branch: string): Promise<number | null> {
+  try {
+    const prData = (await $`gh pr view --json number`).stdout;
+
+    return JSON.parse(prData).number;
+  } catch {
+    return null;
+  }
 }
 
 async function confirm(prompt: string): Promise<boolean> {
@@ -593,8 +603,18 @@ async function cmdSubmit() {
 
   for (const branchName of stack) {
     const prNumber = await getPrNumber(branchName);
+
     if (prNumber) {
       logInfo(`PR #${prNumber} already exists for branch '${branchName}'.`);
+      continue;
+    }
+
+    // Check if a PR already exists but we don't have it recorded
+    const untrackedPrNumber = await readPrNumberFromGithub(branchName);
+
+    if (untrackedPrNumber) {
+      await setPrNumber(branchName, untrackedPrNumber);
+      logInfo(`Tracked PR #${untrackedPrNumber} for branch '${branchName}'.`);
       continue;
     }
 
@@ -616,22 +636,27 @@ async function cmdSubmit() {
       await $`git log -1 --pretty=%s ${branchName}`
     ).stdout.trim();
 
+    console.log(
+      `gh pr create --title "${prTitle}" --body "## Overview" --head "${branchName}" --base "${parent}"`
+    );
+
     try {
       const prResponse = JSON.parse(
         (
-          await $`gh api repos/${config.ghUser}/${config.ghRepo}/pulls --method POST -f title=${prTitle} -f head=${branchName} -f base=${parent}`
+          await $`gh pr create --title "${prTitle}" --body "## Overview" --head "${branchName}" --base "${parent}" --json`
         ).stdout
       );
 
       if (prResponse.number) {
-        await setPrNumber(branchName, String(prResponse.number));
+        await setPrNumber(branchName, prResponse.number);
         logSuccess(
           `Created PR #${prResponse.number} for '${branchName}': ${prResponse.html_url}`
         );
       } else {
         throw new Error("Invalid PR creation response");
       }
-    } catch (e) {
+    } catch (e: any) {
+      console.log(e.stderr);
       logError(`Failed to create PR for '${branchName}'.`);
       if ((e as any).stderr) logError((e as any).stderr);
       process.exit(1);
