@@ -23,6 +23,7 @@ interface GssConfig {
   ghRepo: string;
   /** A map where the key is the child branch and the value is its parent. */
   branchParents: Record<string, string>;
+  branchPullRequests: Record<string, number>;
 }
 
 let gitRoot: string;
@@ -36,6 +37,7 @@ const config: GssConfig = {
   ghUser: "",
   ghRepo: "",
   branchParents: {},
+  branchPullRequests: {},
 };
 
 // --- Logging Helpers ---
@@ -212,18 +214,12 @@ async function getBranchShas(
 }
 
 async function getPrNumber(branch: string): Promise<number | null> {
-  try {
-    const prNumberString = (
-      await $`git config --get branch.${branch}.pr-number`
-    ).stdout.trim();
-    return Number(prNumberString);
-  } catch {
-    return null;
-  }
+  return config.branchPullRequests[branch] ?? null;
 }
 
 async function setPrNumber(branch: string, prNumber: string) {
-  await $`git config branch.${branch}.pr-number ${prNumber}`;
+  config.branchPullRequests[branch] = Number(prNumber);
+  await writeGssConfig();
 }
 
 async function confirm(prompt: string): Promise<boolean> {
