@@ -61,6 +61,17 @@ mock_pr_create_failure() {
     touch "$mock_state_dir/pr_create_fail"
 }
 
+# Registers a PR in the local state file for a branch.
+# Usage: track_pr <branch_name> <pr_number>
+track_pr() {
+    local branch_name=$1
+    local pr_number=$2
+    local config_file="$BATS_TEST_TMPDIR/local/.git/GSS_CONFIG_CACHE"
+
+    local updated_jq=$(jq '.branchPullRequests["'"$branch_name"'"] = '"$pr_number"'' "$config_file")
+    echo "$updated_jq" > "$config_file"
+}
+
 # Cleans up any state files created by the mock gh CLI.
 cleanup_mock_gh_state() {
     rm -rf /tmp/gss_mock_gh_state
@@ -104,7 +115,7 @@ assert_branch_parent() {
 assert_branch_pr_number() {
     local branch_name=$1
     local expected_pr_number=$2
-    run git config --get "branch.${branch_name}.pr-number"
+    run jq -r ".branchPullRequests[\"$branch_name\"]" "$BATS_TEST_TMPDIR/local/.git/GSS_CONFIG_CACHE"
     assert_success
     assert_output "$expected_pr_number"
 }
@@ -112,7 +123,7 @@ assert_branch_pr_number() {
 # Asserts that a branch does NOT have a PR number set.
 assert_branch_has_no_pr_number() {
     local branch_name=$1
-    run git config --get "branch.${branch_name}.pr-number"
+    run jq -r ".branchPullRequests[\"$branch_name\"]" "$BATS_TEST_TMPDIR/local/.git/GSS_CONFIG_CACHE"
     assert_failure
 }
 
