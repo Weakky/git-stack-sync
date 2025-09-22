@@ -1,20 +1,19 @@
 # Git Stack Sync (`gss`) - A Simple CLI for Stacked Git Branches
 
-**Git Stack Sync (`gss`)** is a command-line tool written in Bash that simplifies working with stacked Git branches. Inspired by the workflows of tools like Graphite, it helps you create, manage, and submit dependent chains of branches without the usual hassle of manual rebasing and pull request management.
+**Git Stack Sync (`gss`)** is a command-line tool, written in TypeScript, that simplifies working with stacked Git branches. Inspired by the workflows of tools like Graphite, it helps you create, manage, and submit dependent chains of branches without the usual hassle of manual rebasing and pull request management.
 
-It works by maintaining a simple set of metadata in your local Git configuration, allowing it to understand the relationships between your branches. When combined with the GitHub CLI (`gh`), `gss` can automate large parts of your development workflow.
+It works by maintaining a simple JSON configuration file in your local `.git` directory, allowing it to understand the relationships between your branches. When combined with the GitHub CLI (`gh`), `gss` can automate large parts of your development workflow.
 
 ### What does it shine at?
 
-  * **Simplicity**: It's a single, dependency-light Bash script. There's no complex installation or background daemon.
-  * **Efficiency**: It leverages modern Git features like `git rebase --update-refs` to perform complex stack rebases in a single, fast operation.
-  * **Automation**: It automates the most tedious parts of stacked branching, such as rebasing an entire stack of branches (`sync`) or intelligently updating children after an amendment (`restack`).
-  * **GitHub Integration**: It seamlessly uses the `gh` CLI to manage pull requests for your entire stack, creating dependencies and updating them as you restructure your branches.
-  * **Clarity**: The `status` command gives you a comprehensive overview of your entire stack, showing which branches are out of sync, need pushing, or have merged pull requests.
+- **Efficiency**: It leverages modern Git features like `git rebase --update-refs` to perform complex stack rebases in a single, fast operation.
+- **Automation**: It automates the most tedious parts of stacked branching, such as rebasing an entire stack of branches (`sync`) or intelligently updating children after an amendment (`restack`).
+- **GitHub Integration**: It seamlessly uses the `gh` CLI to manage pull requests for your entire stack, creating dependencies and updating them as you restructure your branches.
+- **Clarity**: The `status` command gives you a comprehensive overview of your entire stack, showing which branches are out of sync, need pushing, or have merged pull requests.
 
 ## Core Concepts
 
-`gss` treats a series of dependent branches as a "stack". When you run `gss create <branch-name>`, it creates a new branch and records its parent in your local Git config (e.g., `branch.branch-name.parent=parent-branch`).
+`gss` treats a series of dependent branches as a "stack". When you run `gss create <branch-name>`, it creates a new branch and records its parent in its configuration file.
 
 This simple parent-child metadata is the foundation for all of `gss`'s powerful features. It allows the tool to traverse the stack, understand dependencies, and perform complex operations like rebasing the entire chain with a single command.
 
@@ -22,23 +21,13 @@ This simple parent-child metadata is the foundation for all of `gss`'s powerful 
 
 1.  **Dependencies**: Make sure you have the following tools installed and available in your `$PATH`:
 
-      * `git` (version **2.39+ required** for `--update-refs` support)
-      * [GitHub CLI (`gh`)](https://www.google.com/search?q=%5Bhttps://cli.github.com/%5D\(https://cli.github.com/\))
-      * [jq](https://stedolan.github.io/jq/)
+    - `git` (version **2.39+ is recommended** for `--update-refs` support)
+    - [Node.js](https://nodejs.org/)
+    - [GitHub CLI (`gh`)](https://cli.github.com/)
 
-2.  **Download the script**: Save the script file (e.g., `gss.sh`) to your computer.
-
-3.  **Make it executable**:
-
+2.  **Install from npm**: You can install `gss` globally from the npm registry.
     ```bash
-    chmod +x /path/to/gss.sh
-    ```
-
-4.  **Place it in your PATH**: For easy access, move the script to a directory in your system's `PATH` and rename it.
-
-    ```bash
-    # For example:
-    sudo mv /path/to/gss.sh /usr/local/bin/gss
+    npm install -g git-stack-sync
     ```
 
 ## Command Reference
@@ -47,106 +36,77 @@ Here is a detailed list of all available commands.
 
 ### Stack & Branch Management
 
-  * #### `gss create <branch-name>`
+- #### `gss create <branch-name>`
 
-    Creates a new branch as a child of the currently checked-out branch and switches to it. This is the primary way to extend a stack.
+  Creates a new branch as a child of the currently checked-out branch and switches to it. This is the primary way to extend a stack.
 
-    ```bash
-    # You are on 'main'
-    gss create feature-a
+- #### `gss insert [--before] <branch-name>`
 
-    # You are now on 'feature-a', whose parent is 'main'.
-    gss create feature-b
+  Inserts a new branch into the stack. By default, it inserts _after_ the current branch. The `--before` flag inserts it _before_ the current branch. `gss` will automatically rebase any descendant branches and update their associated pull requests on GitHub.
 
-    # You are now on 'feature-b', whose parent is 'feature-a'.
-    ```
+- #### `gss squash [--into parent|child]`
 
-  * #### `gss insert [--before] <branch-name>`
+  Squashes the commits from one branch into another and deletes the squashed branch. By default, it squashes the current branch into its `parent`. Use `--into child` to squash the child branch into the current one. `gss` will prompt to close the pull request of the deleted branch.
 
-    Inserts a new branch into the stack. By default, it inserts *after* the current branch. The `--before` flag inserts it *before* the current branch. `gss` will automatically rebase any descendant branches and update their associated pull requests on GitHub.
+- #### `gss track [parent-branch]`
 
-    ```bash
-    # In a stack main -> feature-a -> feature-c
-    # You are on 'feature-a'
-    gss insert feature-b
+  Manually marks an existing branch as a stacked branch. If `parent-branch` is omitted, the repository's base branch (e.g., `main`) is used.
 
-    # The new stack is main -> feature-a -> feature-b -> feature-c
-    # and you are now on 'feature-b'.
-    ```
-
-  * #### `gss squash [--into parent|child]`
-
-    Squashes the commits from one branch into another and deletes the squashed branch. By default, it squashes the current branch into its `parent`. Use `--into child` to squash the child branch into the current one. `gss` will prompt to close the pull request of the deleted branch.
-
-  * #### `gss track <set|remove> [parent-branch]`
-
-    Manually manages stack metadata.
-
-      * `track set [parent-branch]`: Marks an existing branch as a stacked branch. If `parent-branch` is omitted, the repository's base branch (e.g., `main`) is used.
-      * `track remove`: Removes `gss` metadata from the current branch.
+- #### `gss untrack`
+  Removes `gss` metadata from the current branch. This is only allowed if the branch has no unique commits. The child branch will be reparented to the untracked branch's parent.
 
 ### Synchronization & History
 
-  * #### `gss sync`
+- #### `gss sync`
 
-    This is the workhorse command for keeping your stack up-to-date. It performs several key operations:
+  This is the workhorse command for keeping your stack up-to-date. It performs several key operations:
 
-    1.  Fetches the latest changes from `origin`.
-    2.  Updates your local base branch (e.g., `main`) to match the remote.
-    3.  Checks the status of the pull request for every branch in your stack.
-    4.  If any PRs have been **merged**, it automatically removes those branches from the stack, re-parents their children, and prepares for cleanup.
-    5.  Rebases the remaining, unmerged branches onto the latest version of the base branch in a single, efficient operation using `git rebase --update-refs`.
+  1.  Fetches the latest changes from `origin`.
+  2.  Updates your local base branch (e.g., `main`) to match the remote.
+  3.  Checks the status of the pull request for every branch in your stack.
+  4.  If any PRs have been **merged**, it automatically removes those branches from the stack, re-parents their children, and prepares for cleanup.
+  5.  Rebases the remaining, unmerged branches onto the latest version of the base branch.
 
-  * #### `gss restack`
+- #### `gss restack`
 
-    Intelligently updates your stack after you've modified its history (e.g., with `git commit --amend` or an interactive rebase). It automatically detects the first branch that has diverged from its parent and rebases all of its descendants on top of it. You can run `restack` from anywhere in the stack.
+  Intelligently updates your stack after you've modified its history (e.g., with `git commit --amend` or an interactive rebase). It automatically detects the first branch that has diverged from its parent and rebases all of its descendants on top of it.
 
-  * #### `gss amend`
+- #### `gss amend`
 
-    A convenient shortcut. It adds all staged changes to the most recent commit (`git commit --amend --no-edit`) and then automatically runs `gss restack` to update any descendant branches.
+  A convenient shortcut. It adds all staged changes to the most recent commit (`git commit --amend --no-edit`) and then automatically runs `gss restack` to update any descendant branches.
 
-  * #### `gss push`
+- #### `gss push`
 
-    Pushes all branches in the current stack to the remote (`origin`). It uses `--force-with-lease` to safely update remote branches after a `sync` or `restack` has changed their history.
+  Pushes all branches in the current stack to the remote (`origin`). It uses `--force-with-lease` to safely update remote branches after a `sync` or `restack` has changed their history.
 
-  * #### `gss continue`
-
-    Resumes a `sync` or `restack` operation after you have resolved a git rebase conflict.
+- #### `gss continue`
+  Resumes a `sync` or `restack` operation after you have resolved a git rebase conflict.
 
 ### Inspection & Navigation
 
-  * #### `gss status`
+- #### `gss status`
 
-    Displays a detailed, colorful overview of the entire current stack, including:
+  Displays a detailed, colorful overview of the entire current stack, including parent-child relationships, sync status, and pull request status.
 
-      * Parent-child relationships.
-      * Sync status relative to parent branches and the remote.
-      * Pull request status (e.g., `OPEN`, `MERGED`, `CLOSED`).
-      * A helpful summary and a suggestion for the next command to run.
+- #### `gss list` (or `ls`)
 
-  * #### `gss list` (or `ls`)
+  Finds and lists all stacks in your local repository.
 
-    Finds and lists all stacks in your local repository.
-
-  * #### `gss up` / `gss down`
-
-    Quickly navigate up (`up`) or down (`down`) the branch stack.
+- #### `gss up` / `gss down`
+  Quickly navigate up (`up`) or down (`down`) the branch stack.
 
 ### GitHub Integration
 
-  * #### `gss submit`
+- #### `gss submit`
 
-    Creates GitHub pull requests for all branches in the stack that don't have one yet. It automatically sets the base branch for each PR to be its parent in the stack, creating a dependent chain of PRs. It will output the URL for each PR created.
+  Creates GitHub pull requests for all branches in the stack that don't have one yet. It automatically sets the base branch for each PR to be its parent in the stack, creating a dependent chain of PRs.
 
-  * #### `gss pr`
-
-    Opens the GitHub pull request for the current branch in your web browser.
+- #### `gss pr`
+  Opens the GitHub pull request for the current branch in your web browser.
 
 ## Workflows & Examples
 
-### 1\. Starting and Submitting a New Stack
-
-This workflow shows how to start a new feature and submit it for review as a stack of dependent pull requests.
+### 1. Starting and Submitting a New Stack
 
 ```bash
 # 1. Start on your base branch (e.g., main)
@@ -165,79 +125,118 @@ git add . && git commit -m "feat: Implement part 2"
 # 4. Create pull requests for the entire stack
 gss submit
 # ➡️  Creating PR for 'feat-part-1'...
-# 🟢 Created PR #101 for 'feat-part-1': https://github.com/user/repo/pull/101
+# 🟢 Created PR #20 for 'feat-part-1': [https://github.com/mock/repo/pull/20](https://github.com/mock/repo/pull/20)
 # ➡️  Creating PR for 'feat-part-2'...
-# 🟢 Created PR #102 for 'feat-part-2': https://github.com/user/repo/pull/102
+# 🟢 Created PR #21 for 'feat-part-2': [https://github.com/mock/repo/pull/21](https://github.com/mock/repo/pull/21)
 # 🟢 Stack submission complete.
 ```
 
-On GitHub, you will now have two pull requests: one for `feat-part-2` targeting `feat-part-1`, and one for `feat-part-1` targeting `main`.
+### 2. Handling a Squashed Merged PR (`sync`)
 
-### 2\. Handling a Squash Merged PR (`sync`)
-
-This is the most common and powerful workflow. Imagine your teammate reviewed and squash-merged the first PR (`feat-part-1`) from the example above. Your local repository is now out of date.
+This is the most common and powerful workflow. Imagine your teammate reviewed and squash-merged the first PR (`feat-part-1`). Your local repository is now out of date.
 
 ```bash
-# 1. Check the status. `gss` will fetch from the remote and detect changes.
+# 1. Check the status. gss will fetch from the remote and detect changes.
 gss status
-
 # ➡️  Gathering stack status...
 #
 # ➡️  main (🟡 Behind by 1)
 #
 # ➡️  feat-part-1 (parent: main)
 #    ├─ Status: 🟡 Behind 'main' (1 commits)
-#    └─ PR:     🟣 #101: MERGED
+#    └─ PR:     🟣 #10: MERGED
 #
 # ➡️  feat-part-2 * (parent: feat-part-1)
 #    ├─ Status: 🟢 Synced
-#    └─ PR:     🟢 #102: OPEN
+#    └─ PR:     🟢 #11: OPEN
 #
 # 🟡 Warning: The stack contains merged branches or is behind the base branch.
 # 💡 Next step: Run 'gss sync' to update the base and rebase the stack.
 
-# 2. Run `sync` to automatically fix everything.
+# 2. Run sync to automatically fix everything.
 gss sync --yes
 # ➡️  Syncing stack with 'main' and checking for merged branches...
 # 🟢 Branch 'feat-part-1' has been merged.
-# ➡️  Rebasing remaining stack onto 'main' with --update-refs...
+# ➡️  Rebasing remaining stack onto 'main'...
 # 🟢 Stack rebased successfully.
 # ➡️  Finishing operation...
 # 🟢 Deleted local branch 'feat-part-1'.
 # 🟢 Operation complete.
 # 💡 Next step: Run 'gss push' to update your remote branches.
 
-# 3. The local `feat-part-1` branch is gone, and `feat-part-2` is now
-#    rebased directly on top of the latest `main`. Check the status again.
+# 3. Push the rebased branch to update its pull request.
+gss push --yes
+```
+
+### 3. Inserting a Branch Mid-Stack (After Review)
+
+This workflow demonstrates how to insert a new feature or fix into the middle of an existing stack. This is common when a code review on `feat-part-2` reveals a missing piece that should have been in its own PR, logically before `feat-part-2`.
+
+```bash
+# 1. You have a stack: main -> feat-part-1 -> feat-part-2
+#    A review on feat-part-2's PR suggests you extract some logic
+#    into its own branch/PR.
+#
+#    First, check out the branch you want to insert *after*.
+gss down
+# 🟢 Checked out parent branch: feat-part-1
+
+# 2. Use `gss insert` to create the new branch.
+#    `gss` will create the new branch and automatically rebase
+#    the old descendant (`feat-part-2`) on top of it.
+gss insert feat-part-1-fixup
+# ➡️  Preparing to insert 'feat-part-1-fixup' after 'feat-part-1'...
+# 🟢 Created branch 'feat-part-1-fixup' on top of 'feat-part-1'.
+# ➡️  Checking stack integrity to find point of divergence...
+# 🟡 Warning: Detected stack divergence at 'feat-part-1-fixup'. Restacking descendants...
+#    Will restack the following branches: feat-part-2
+# 🟢 Restack complete.
+# 🟢 Successfully inserted 'feat-part-1-fixup' into the stack.
+# 💡 Next step: Add commits, then run 'gss submit' to create a PR.
+
+# 3. You are now on the new branch. Add your changes and commit.
+echo "A fix" > fix.txt
+git add . && git commit -m "feat: Add fixup for part 1"
+
+# 4. Your stack is now: main -> feat-part-1 -> feat-part-1-fixup -> feat-part-2
+#    Check the status to see the new structure.
 gss status
-# ➡️  feat-part-2 * (parent: main)
+# ➡️  feat-part-1-fixup * (parent: feat-part-1)
+#    ├─ Status: ⚪ Not on remote
+#    └─ PR:     ⚪ No PR submitted
+#
+# ➡️  feat-part-2 (parent: feat-part-1-fixup)
 #    ├─ Status: 🟡 Needs push (local history has changed)
 #    └─ PR:     🟢 #102: OPEN
 #
 # 🟡 Warning: One or more local branches have changed.
 # 💡 Next step: Run 'gss push' to update the remote.
 
-# 4. Push the rebased branch to update its pull request.
+# 5. Submit the new branch and push the changes.
+gss submit
 gss push --yes
 ```
+### 4. Amending a Commit Mid-Stack (`amend` & `restack`)
 
-Your stack is now clean, up-to-date, and consists of a single branch (`feat-part-2`) based on `main`.
+This workflow covers the common scenario where you need to modify a commit on a parent branch that already has other branches stacked on top of it. `gss` makes this a safe and simple operation.
 
-### 3\. Amending a Commit in a Stack (`amend`)
-
-Imagine you need to fix something in `feat-part-1` while `feat-part-2` already depends on it.
+Imagine your stack is `main -> feat-part-1 -> feat-part-2`, and you need to make a small fix to the commit on `feat-part-1`.
 
 ```bash
-# 1. You have a stack: main -> feat-part-1 -> feat-part-2
-#    Check out the branch you need to edit.
-git checkout feat-part-1
+# 1. You have a stack and need to edit an earlier branch.
+#    First, check out the branch you need to modify.
+gss down
+# 🟢 Checked out parent branch: feat-part-1
 
-# 2. Make your changes and stage them.
-echo "a fix" >> file1.txt
+# 2. Make your code change and stage it using git.
+echo "A small fix" >> file1.txt
 git add file1.txt
 
-# 3. Run `gss amend`. It will amend the commit and automatically restack
-#    any descendant branches (`feat-part-2`) for you.
+# 3. Run `gss amend`.
+#    This command will amend your staged changes to the latest commit and
+#    then automatically trigger a `restack`. The restack operation detects
+#    that `feat-part-1` has changed and rebases its descendant, `feat-part-2`,
+#    on top of the new version.
 gss amend --yes
 # ➡️  Amending changes to the last commit on 'feat-part-1'...
 # 🟢 Commit amended successfully.
@@ -247,7 +246,9 @@ gss amend --yes
 # 🟢 Restack complete.
 # ➡️  Finishing operation...
 # 🟢 Operation complete.
+# 💡 Next step: Run 'gss push' to update your remote branches.
 
-# 4. Both branches are now updated locally. Force-push to update the remote.
+# 4. Your entire stack is now consistent. `feat-part-2` is correctly
+#    rebased on the amended `feat-part-1`.
+#    The final step is to update the PRs on GitHub.
 gss push --yes
-```

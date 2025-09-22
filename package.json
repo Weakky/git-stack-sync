@@ -1,5 +1,5 @@
 {
-  "name": "gss",
+  "name": "git-stack-sync",
   "version": "0.0.1",
   "description": "A CLI for managing stacked Git branches.",
   "main": "dist/index.js",
