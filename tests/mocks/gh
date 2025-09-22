@@ -18,21 +18,59 @@ elif [[ "$1" == "auth" && "$2" == "status" ]]; then
     exit 0
 
 elif [[ "$1" == "pr" && "$2" == "view" ]]; then
-    pr_number=$3
-    state_file="$MOCK_STATE_DIR/pr_${pr_number}_state"
+    # Handles viewing a PR by number OR by branch name
+    pr_identifier=$3
+    state_file="$MOCK_STATE_DIR/pr_${pr_identifier}_state"
+    branch_file="$MOCK_STATE_DIR/pr_${pr_identifier}_branch"
+
     pr_state="OPEN"
     if [[ -f "$state_file" ]]; then
         pr_state=$(cat "$state_file")
+    fi
+
+    ## if the identifier is not a number, we assume it's a branch name and try to find the associated PR
+    if ! [[ "$pr_identifier" =~ ^[0-9]+$ ]]; then
+     ## Look for "$mock_state_dir/pr_branch_${branch_name}_number" file. Content contains the PR number.
+     branch_name="$pr_identifier"
+     found_pr_number=""
+     if [[ -f "$MOCK_STATE_DIR/pr_branch_${branch_name}_number" ]]; then
+         found_pr_number=$(cat "$MOCK_STATE_DIR/pr_branch_${branch_name}_number")
+     fi
+     if [[ -z "$found_pr_number" ]]; then
+         echo "Error: Could not find a PR associated with branch '$branch_name'" >&2
+         exit 1
+     fi
+        pr_identifier="$found_pr_number"
+    fi
+
+    if [[ $4 == "--json" && "$5" == "number" ]]; then
+        echo "{\"number\":$pr_identifier}"
+        exit 0
     fi
 
     if [[ "$4" == "--json" && "$5" == "state" ]]; then
          echo "{\"state\":\"$pr_state\"}"
          exit 0
     fi
+
     if [[ "$4" == "--json" && "$5" == "state,url" ]]; then
-        echo "{\"state\":\"$pr_state\", \"url\":\"https://github.com/mock/repo/pull/$pr_number\"}"
+        echo "{\"state\":\"$pr_state\", \"url\":\"https://github.com/mock/repo/pull/$pr_identifier\"}"
         exit 0
     fi
+
+elif [[ "$1" == "pr" && "$2" == "create" ]]; then
+    # This mocks the PR creation call.
+    if [[ -f "$MOCK_STATE_DIR/pr_create_fail" ]]; then
+        echo '{"message":"Mock API error: Failed to create PR."}'
+        exit 1
+    fi
+    
+    pr_number=$(cat "$PR_COUNTER_FILE")
+    echo "$((pr_number + 1))" > "$PR_COUNTER_FILE"
+    
+    # The Typescript script expects a JSON object with number and html_url
+    echo "{\"number\": $pr_number, \"html_url\": \"https://github.com/mock/repo/pull/$pr_number\"}"
+    exit 0
 
 elif [[ "$1" == "pr" && "$2" == "close" ]]; then
     exit 0

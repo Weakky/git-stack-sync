@@ -83,7 +83,7 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b
-    git config branch.feature-a.pr-number 10 # Pre-configure feature-a with a PR
+    track_pr feature-a 10 # Pre-configure feature-a with a PR
     run git checkout feature-b
 
     # Action
@@ -170,7 +170,7 @@ teardown() {
     # Setup
     create_stack feature-a
     # We simulate that PR #30 was created on GitHub for 'feature-a' outside of gss.
-    mock_untracked_pr feature-a 30
+    mock_pr_state 30 OPEN feature-a
 
     # Action
     run "$GSS_CMD" submit
@@ -184,4 +184,8 @@ teardown() {
     # --- State Assertions ---
     # The config should now contain the PR number it discovered.
     assert_branch_pr_number feature-a 30
+
+    run "$GSS_CMD" status
+    assert_success
+    assert_output --partial "PR:     🟢 #30: OPEN"
 }

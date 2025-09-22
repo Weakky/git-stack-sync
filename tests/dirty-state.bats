@@ -197,15 +197,15 @@ create_untracked_file() {
     assert_output --partial "Command cannot run with uncommitted changes"
 }
 
-@test "track remove: works with dirty state" {
+@test "untrack: works with dirty state" {
     # Setup
     run "$GSS_CMD" create feature-a
     create_dirty_state
 
     # Action
-    # This should fail because 'track remove' now has the guard.
+    # This should fail because 'untrack' now has the guard.
     # We are not creating unique commits, so the *other* guard won't trigger.
-    run "$GSS_CMD" track remove
+    run "$GSS_CMD" untrack
 
     # Assertions
     assert_success

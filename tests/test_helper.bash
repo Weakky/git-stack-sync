@@ -44,13 +44,21 @@ create_commit() {
 }
 
 # Sets up a mock PR response for the 'gh' mock.
-# Usage: mock_pr_state <pr_number> <state: OPEN|MERGED|CLOSED>
+# Usage: mock_pr_state <pr_number> <state: OPEN|MERGED|CLOSED> [branch_name]
+# If branch_name is provided, it links the PR to that branch.
+# gss won't know about this PR unless tracked.
 mock_pr_state() {
     local pr_number=$1
     local state=$2
+    local branch_name=$3
+
     local mock_state_dir="/tmp/gss_mock_gh_state"
     mkdir -p "$mock_state_dir"
     echo "$state" > "$mock_state_dir/pr_${pr_number}_state"
+
+    if [ -n "$branch_name" ]; then
+        echo "$pr_number" > "$mock_state_dir/pr_branch_${branch_name}_number"
+    fi
 }
 
 # Mocks a failure response for a PR creation call.
@@ -61,6 +69,16 @@ mock_pr_create_failure() {
     touch "$mock_state_dir/pr_create_fail"
 }
 
+# Sets up a mock for an existing, untracked PR on GitHub.
+# Usage: mock_untracked_pr <branch_name> <pr_number>
+mock_untracked_pr() {
+    local branch_name=$1
+    local pr_number=$2
+    local mock_state_dir="/tmp/gss_mock_gh_state"
+    mkdir -p "$mock_state_dir"
+    echo "$pr_number" > "$mock_state_dir/untracked_pr_${branch_name}"
+}
+
 # Registers a PR in the local state file for a branch.
 # Usage: track_pr <branch_name> <pr_number>
 track_pr() {
@@ -68,7 +86,9 @@ track_pr() {
     local pr_number=$2
     local config_file="$BATS_TEST_TMPDIR/local/.git/GSS_CONFIG_CACHE"
 
-    local updated_jq=$(jq '.branchPullRequests["'"$branch_name"'"] = '"$pr_number"'' "$config_file")
+    local updated_jq;
+    updated_jq=$(jq '.branchPullRequests["'"$branch_name"'"] = '"$pr_number"'' "$config_file")
+
     echo "$updated_jq" > "$config_file"
 }
 
@@ -124,7 +144,8 @@ assert_branch_pr_number() {
 assert_branch_has_no_pr_number() {
     local branch_name=$1
     run jq -r ".branchPullRequests[\"$branch_name\"]" "$BATS_TEST_TMPDIR/local/.git/GSS_CONFIG_CACHE"
-    assert_failure
+    assert_success
+    assert_output "null"
 }
 
 # Asserts that a local branch exists.

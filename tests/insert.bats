@@ -157,7 +157,7 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-c
-    git config branch.feature-c.pr-number 15
+    track_pr feature-c 15
     mock_pr_state 15 OPEN
     run git checkout feature-a
 

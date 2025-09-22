@@ -132,7 +132,7 @@ teardown() {
 
     # Untrack the middle branch. This should succeed as there are no unique commits.
     run git checkout feature-b
-    run "$GSS_CMD" track remove
+    run "$GSS_CMD" untrack
 
     # Action
     run "$GSS_CMD" list

@@ -74,10 +74,10 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b
-    git config branch.feature-a.pr-number 10
-    git config branch.feature-b.pr-number 11
     mock_pr_state 10 OPEN
     mock_pr_state 11 OPEN
+    track_pr feature-a 10
+    track_pr feature-b 11
     run "$GSS_CMD" push --yes
     run git checkout feature-a # Explicitly checkout the branch to test
     local shas_before; shas_before=$(get_all_branch_shas)
@@ -179,8 +179,8 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b
-    git config branch.feature-a.pr-number 10
-    git config branch.feature-b.pr-number 11
+    track_pr feature-a 10
+    track_pr feature-b 11
     mock_pr_state 10 MERGED
     mock_pr_state 11 CLOSED
     local shas_before; shas_before=$(get_all_branch_shas)

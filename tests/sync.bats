@@ -87,8 +87,8 @@ teardown() {
     # Setup
     create_stack feature-a feature-b
     # Mock PRs: #10 for feature-a, #11 for feature-b
-    git config branch.feature-a.pr-number 10
-    git config branch.feature-b.pr-number 11
+    track_pr feature-a 10
+    track_pr feature-b 11
     mock_pr_state 10 MERGED # Mock feature-a's PR as merged
     git checkout feature-b
 
@@ -119,8 +119,8 @@ teardown() {
     # Setup
     create_stack br1 br2
     # Set up PRs and push the initial stack to the remote
-    git config branch.br1.pr-number 10
-    git config branch.br2.pr-number 11
+    track_pr br1 10
+    track_pr br2 11
     mock_pr_state 10 OPEN
     mock_pr_state 11 OPEN
     run "$GSS_CMD" push --yes # Push the initial state
@@ -180,7 +180,7 @@ teardown() {
     
     # Setup
     create_stack br1 br2
-    git config branch.br1.pr-number 10
+    track_pr br1 10
     mock_pr_state 10 MERGED
     
     # Simulate a squash merge of br1 into main
@@ -280,8 +280,8 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b feature-c feature-d
-    git config branch.feature-b.pr-number 12
-    git config branch.feature-c.pr-number 13
+    track_pr feature-b 12
+    track_pr feature-c 13
     mock_pr_state 12 MERGED
     mock_pr_state 13 MERGED
     git checkout feature-d
@@ -310,8 +310,8 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b
-    git config branch.feature-a.pr-number 10
-    git config branch.feature-b.pr-number 11
+    track_pr feature-a 10
+    track_pr feature-b 11
     mock_pr_state 10 MERGED
     mock_pr_state 11 MERGED
     git checkout feature-b
@@ -367,8 +367,8 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b feature-c
-    git config branch.feature-a.pr-number 10
-    git config branch.feature-c.pr-number 12
+    track_pr feature-a 10
+    track_pr feature-c 12
     mock_pr_state 10 MERGED # feature-a is merged
     mock_pr_state 12 MERGED # feature-c is merged
     git checkout feature-c
@@ -400,7 +400,7 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b
-    git config branch.feature-b.pr-number 11
+    track_pr feature-b 11
     mock_pr_state 11 MERGED # Only feature-b is merged
     git checkout feature-b
 
@@ -426,7 +426,7 @@ teardown() {
     
     # Setup
     create_stack feature-a feature-b feature-c
-    git config branch.feature-a.pr-number 10
+    track_pr feature-a 10
     mock_pr_state 10 MERGED
     git checkout feature-b # Start from the middle
 
@@ -512,7 +512,7 @@ teardown() {
     create_commit "feat: add line 3" "$(echo -e "line 1\nline 2\nline 3")" "file.txt"
 
     # 2. Mock the PR for br1 as merged.
-    git config branch.br1.pr-number 10
+    track_pr br1 10
     mock_pr_state 10 MERGED
     
     # 3. Perform a true squash merge of br1 into main.
@@ -563,7 +563,7 @@ teardown() {
     create_commit "br3 commit" "version=3" "file2.txt"
 
     # 2. Mock br1 as merged and create a conflicting squash on main.
-    git config branch.br1.pr-number 10
+    track_pr br1 10
     mock_pr_state 10 MERGED
     run git checkout main
     run git merge --squash br1

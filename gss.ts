@@ -637,10 +637,6 @@ async function cmdSubmit() {
       await $`git log -1 --pretty=%s ${branchName}`
     ).stdout.trim();
 
-    console.log(
-      `gh pr create --title "${prTitle}" --body "## Overview" --head "${branchName}" --base "${parent}"`
-    );
-
     try {
       const prResponse = JSON.parse(
         (

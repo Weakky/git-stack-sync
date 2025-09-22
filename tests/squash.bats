@@ -150,7 +150,7 @@ teardown() {
 
 @test "squash: prompts to close PR of squashed branch and user agrees" {
     create_stack br1 br2
-    git config branch.br2.pr-number 42
+    track_pr br2 42
     mock_pr_state 42 OPEN
     run git checkout br2
     

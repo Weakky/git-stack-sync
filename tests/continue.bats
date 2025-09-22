@@ -148,7 +148,7 @@ teardown() {
     # Setup
     create_stack br1 br2
     # Mock br1 as merged
-    git config branch.br1.pr-number 10
+    track_pr br1 10
     mock_pr_state 10 MERGED
     # Create a conflict for br2
     run git checkout main
@@ -233,7 +233,7 @@ teardown() {
     
     # Setup
     create_stack br1 br2
-    git config branch.br1.pr-number 10
+    track_pr br1 10
     mock_pr_state 10 MERGED
     run git checkout main
     create_commit "main changes" "version=main" "file.txt"
