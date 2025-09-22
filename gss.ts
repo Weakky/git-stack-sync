@@ -224,7 +224,7 @@ async function setPrNumber(branch: string, prNumber: number) {
 
 async function readPrNumberFromGithub(branch: string): Promise<number | null> {
   try {
-    const prData = (await $`gh pr view --json number`).stdout;
+    const prData = (await $`gh pr view "${branch}" --json number`).stdout;
 
     return JSON.parse(prData).number;
   } catch {
