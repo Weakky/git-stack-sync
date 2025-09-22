@@ -51,14 +51,20 @@ teardown() {
     run "$GSS_CMD" sync --yes
     assert_failure "Expected initial sync to fail"
 
-    # Action: Try to run a different gss command
-    run "$GSS_CMD" list
-    
-    # Assertions
-    assert_failure
-    assert_output --partial "A gss operation is paused because of a Git rebase conflict"
-    assert_output --partial "run 'git rebase --continue'"
-    assert_output --partial "run 'gss continue' to finalize"
+    # Action & Assertions: Check that all relevant commands are blocked
+    local commands_to_block=(
+        create up down push submit sync list ls status amend restack pr
+        track insert squash
+    )
+
+    for cmd in "${commands_to_block[@]}"; do
+        echo "--- Checking blocked command: $cmd ---"
+        run "$GSS_CMD" "$cmd"
+        assert_failure "Command '$cmd' should have been blocked"
+        assert_output --partial "A gss operation is paused because of a Git rebase conflict"
+        assert_output --partial "run 'git rebase --continue'"
+        assert_output --partial "run 'gss continue' to finalize"
+    done
 }
 
 @test "guard: blocks commands after a rebase has been aborted" {
@@ -73,21 +79,65 @@ teardown() {
     create_commit "main changes" "version=3" "file.txt"
     run git push origin main
     run git checkout br1
-    run "$GSS_CMD" sync --yes
+    run "$GSS_CMD" sync
     assert_failure "Expected initial sync to fail"
 
     # Abort the rebase manually
     run git rebase --abort
     assert_success
 
-    # Action: Try to run a different gss command
-    run "$GSS_CMD" status
-    
-    # Assertions
-    assert_failure
-    assert_output --partial "A previous gss operation is pending completion"
-    assert_output --partial "Run 'gss continue' to finalize and clean up"
+    # Action & Assertions: Check that all relevant commands are blocked
+    local commands_to_block=(
+        create up down push submit sync list ls status amend restack pr
+        track insert squash
+    )
+
+    for cmd in "${commands_to_block[@]}"; do
+        echo "--- Checking blocked command: $cmd ---"
+        run "$GSS_CMD" "$cmd"
+        assert_failure "Command '$cmd' should have been blocked"
+        assert_output --partial "A previous gss operation is pending completion"
+        assert_output --partial "Run 'gss continue' to finalize and clean up"
+    done
 }
+
+@test "guard: blocks commands after a rebase has succeeded but before continue" {
+    # SCENARIO: A sync operation hits a conflict, the user resolves it and runs
+    # `git rebase --continue`. The git part is done, but the gss operation is not
+    # yet finalized. The guard must still block other commands.
+
+    # Setup: Create a conflict, start a failing sync, then resolve it.
+    create_commit "base" "version=1" "file.txt"
+    run "$GSS_CMD" create br1
+    create_commit "br1 changes" "version=2" "file.txt"
+    run git checkout main
+    create_commit "main changes" "version=3" "file.txt"
+    run git push origin main
+    run git checkout br1
+    run "$GSS_CMD" sync
+    assert_failure "Expected initial sync to fail"
+
+    # Manually resolve the rebase
+    echo "resolved" > file.txt
+    git add file.txt
+    GIT_EDITOR=true run git rebase --continue
+    assert_success
+
+    # Action & Assertions: Check that all relevant commands are blocked
+    local commands_to_block=(
+        create up down push submit sync list ls status amend restack pr
+        track insert squash
+    )
+
+    for cmd in "${commands_to_block[@]}"; do
+        echo "--- Checking blocked command: $cmd ---"
+        run "$GSS_CMD" "$cmd"
+        assert_failure "Command '$cmd' should have been blocked"
+        assert_output --partial "A previous gss operation is pending completion"
+        assert_output --partial "Run 'gss continue' to finalize and clean up"
+    done
+}
+
 
 # --- Successful Rebase Flow ---
 
@@ -275,3 +325,4 @@ teardown() {
     assert_success
     assert_output --partial "No gss operation to continue. Nothing to do."
 }
+
