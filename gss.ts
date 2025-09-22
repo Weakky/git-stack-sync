@@ -222,16 +222,6 @@ async function setPrNumber(branch: string, prNumber: number) {
   await writeGssConfig();
 }
 
-async function readPrNumberFromGithub(branch: string): Promise<number | null> {
-  try {
-    const prData = (await $`gh pr view "${branch}" --json number`).stdout;
-
-    return JSON.parse(prData).number;
-  } catch {
-    return null;
-  }
-}
-
 async function confirm(prompt: string): Promise<boolean> {
   if (autoConfirm) return true;
   const answer = await question(`❔ ${prompt} (y/N) `);
@@ -610,15 +600,6 @@ async function cmdSubmit() {
       continue;
     }
 
-    // Check if a PR already exists but we don't have it recorded
-    const untrackedPrNumber = await readPrNumberFromGithub(branchName);
-
-    if (untrackedPrNumber) {
-      await setPrNumber(branchName, untrackedPrNumber);
-      logInfo(`Tracked PR #${untrackedPrNumber} for branch '${branchName}'.`);
-      continue;
-    }
-
     const parent = getParentBranch(branchName) || config.baseBranch;
     const commitCount = parseInt(
       (await $`git rev-list --count ${parent}..${branchName}`).stdout
@@ -640,7 +621,7 @@ async function cmdSubmit() {
     try {
       const prResponse = JSON.parse(
         (
-          await $`gh pr create --title "${prTitle}" --body "## Overview" --head "${branchName}" --base "${parent}" --json`
+          await $`gh pr create --title "${prTitle}" --body "## Overview\n\n(TBD)" --head "${branchName}" --base "${parent}" --json`
         ).stdout
       );
 
@@ -662,16 +643,23 @@ async function cmdSubmit() {
   logSuccess("Stack submission complete.");
 }
 
-type PRState = "MERGED" | "CLOSED" | "OPEN" | "UNSUBMITTED" | "FETCH_FAILED";
-
-type GithubPRInfoResponse = {
-  state: PRState;
-  prNumber: number | null;
-  url: string | null;
-};
+type GithubPRInfoResponse =
+  | {
+      state: "UNSUBMITTED";
+    }
+  | { state: "FETCH_FAILED"; prNumber: number | null }
+  | {
+      state: "MERGED" | "CLOSED" | "OPEN";
+      prNumber: number;
+      url: string | null;
+      headRefName: string | null;
+      baseRefName: string | null;
+    };
 
 async function fetchPRState(prNumber: number): Promise<GithubPRInfoResponse> {
-  const json = (await $`gh pr view ${prNumber} --json state,url`).stdout;
+  const json = (
+    await $`gh pr view ${prNumber} --json state,url,headRefName,baseRefName`
+  ).stdout;
   const parsed = JSON.parse(json);
 
   return { ...parsed, prNumber } satisfies GithubPRInfoResponse;
@@ -688,8 +676,6 @@ async function fetchPRStates(
         branch,
         info: {
           state: "UNSUBMITTED",
-          prNumber: null,
-          url: null,
         } satisfies GithubPRInfoResponse,
       };
     }
@@ -704,7 +690,6 @@ async function fetchPRStates(
         info: {
           state: "FETCH_FAILED",
           prNumber,
-          url: null,
         } satisfies GithubPRInfoResponse,
       };
     }
@@ -988,18 +973,17 @@ async function cmdStatus() {
     // --- PR Line ---
     const prInfo = prInfoMap.get(branch);
     let prStatus = "";
-    if (prInfo?.prNumber) {
-      if (prInfo.state === "OPEN") {
-        prStatus = `🟢 #${prInfo.prNumber}: OPEN - ${prInfo.url}`;
-      } else if (prInfo.state === "MERGED") {
-        prStatus = `🟣 #${prInfo.prNumber}: MERGED`;
-        stackHasMergedBranches = true;
-      } else if (prInfo.state === "CLOSED") {
-        prStatus = `🔴 #${prInfo.prNumber}: CLOSED`;
-      } else if (prInfo.state === "FETCH_FAILED") {
-        prStatus = `🟡 Could not fetch status for PR #${prInfo.prNumber}`;
-      }
-    } else {
+
+    if (prInfo?.state === "OPEN") {
+      prStatus = `🟢 #${prInfo.prNumber}: OPEN - ${prInfo.url}`;
+    } else if (prInfo?.state === "MERGED") {
+      prStatus = `🟣 #${prInfo.prNumber}: MERGED`;
+      stackHasMergedBranches = true;
+    } else if (prInfo?.state === "CLOSED") {
+      prStatus = `🔴 #${prInfo.prNumber}: CLOSED`;
+    } else if (prInfo?.state === "FETCH_FAILED") {
+      prStatus = `🟡 Could not fetch status for PR #${prInfo.prNumber}`;
+    } else if (prInfo?.state === "UNSUBMITTED") {
       prStatus = "⚪ No PR submitted";
       stackNeedsSubmit = true;
     }
@@ -1226,9 +1210,36 @@ async function cmdPr() {
   }
 }
 
-async function cmdTrack(parent?: string) {
+async function cmdTrack(args: string[]) {
+  const prFlagIndex = args.findIndex((arg) => arg === "--pr");
+  const branchFlagIndex = args.findIndex((arg) => arg === "--parent");
+
+  if (prFlagIndex !== -1 && branchFlagIndex !== -1) {
+    logError("Cannot use both --pr and --branch flags together.");
+    logSuggestion("Usage: gss track [--pr <number>] [--branch [parent]]");
+    process.exit(1);
+  }
+
+  if (prFlagIndex !== -1) {
+    const prNumberStr = args[prFlagIndex + 1];
+    const prNumber = prNumberStr ? parseInt(prNumberStr) : NaN;
+    if (!prNumber || isNaN(prNumber) || prNumber <= 0) {
+      logError("A valid PR number is required with the --pr flag.");
+      process.exit(1);
+    }
+
+    await cmdTrackPr({ prNumber });
+  } else {
+    const parentBranch =
+      branchFlagIndex !== -1 ? args[branchFlagIndex + 1] : undefined;
+
+    await cmdTrackBranch({ parent: parentBranch });
+  }
+}
+
+async function cmdTrackBranch(options: { parent?: string }) {
   const currentBranch = await getCurrentBranch();
-  const parentBranch = parent || config.baseBranch;
+  const parentBranch = options.parent || config.baseBranch;
 
   try {
     await $`git rev-parse --verify ${parentBranch}`;
@@ -1246,6 +1257,58 @@ async function cmdTrack(parent?: string) {
   }
   await setParentBranch(currentBranch, parentBranch);
   logSuccess(`Set parent of '${currentBranch}' to '${parentBranch}'.`);
+}
+
+async function cmdTrackPr(options: { prNumber: number }) {
+  const prNumber = options.prNumber;
+  if (!prNumber || isNaN(prNumber) || prNumber <= 0) {
+    logError("A valid PR number is required to track by PR.");
+    process.exit(1);
+  }
+  await checkGhAuth();
+  let prInfo: GithubPRInfoResponse;
+  try {
+    prInfo = await fetchPRState(prNumber);
+  } catch {
+    logError(`Could not fetch information for PR #${prNumber}.`);
+    process.exit(1);
+  }
+
+  if (prInfo.state === "FETCH_FAILED") {
+    logError(`Could not fetch information for PR #${prNumber}.`);
+    process.exit(1);
+  }
+
+  if (prInfo.state === "CLOSED" || prInfo.state === "MERGED") {
+    logError(`PR #${prNumber} is ${prInfo.state}. Cannot track a closed PR.`);
+    process.exit(1);
+  }
+
+  if (prInfo.state === "UNSUBMITTED") {
+    logError(`PR #${prNumber} does not exist.`);
+    process.exit(1);
+  }
+
+  const currentBranch = await getCurrentBranch();
+  const parentBranch = await getParentBranch(currentBranch);
+
+  if (parentBranch && parentBranch !== prInfo.baseRefName) {
+    logError(
+      `Current parent '${parentBranch}' does not match PR base '${prInfo.baseRefName}'.`
+    );
+    process.exit(1);
+  }
+
+  if (currentBranch !== prInfo.headRefName) {
+    logError(
+      `Current branch '${currentBranch}' does not match PR head '${prInfo.headRefName}'.`
+    );
+    process.exit(1);
+  }
+
+  await setPrNumber(currentBranch, prNumber);
+
+  logSuccess(`'${currentBranch}' associated with PR #${prNumber}.`);
 }
 
 async function cmdUntrack() {
@@ -1606,7 +1669,7 @@ async function main() {
       await cmdPr();
       break;
     case "track":
-      await cmdTrack(commandArgs[0]);
+      await cmdTrack(commandArgs);
       break;
     case "untrack":
       await cmdUntrack();
