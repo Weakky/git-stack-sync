@@ -44,20 +44,24 @@ create_commit() {
 }
 
 # Sets up a mock PR response for the 'gh' mock.
-# Usage: mock_pr_state <pr_number> <state: OPEN|MERGED|CLOSED> [branch_name]
+# Usage: mock_pr_state <pr_number> <state: OPEN|MERGED|CLOSED> [base_branch_name] [head_branch_name]
 # If branch_name is provided, it links the PR to that branch.
-# gss won't know about this PR unless tracked.
 mock_pr_state() {
     local pr_number=$1
     local state=$2
-    local branch_name=$3
+    local base_branch_name=$3
+    local head_branch_name=$4
 
     local mock_state_dir="/tmp/gss_mock_gh_state"
     mkdir -p "$mock_state_dir"
     echo "$state" > "$mock_state_dir/pr_${pr_number}_state"
 
-    if [ -n "$branch_name" ]; then
-        echo "$pr_number" > "$mock_state_dir/pr_branch_${branch_name}_number"
+    if [ -n "$base_branch_name" ]; then
+        echo "$base_branch_name" >> "$mock_state_dir/pr_${pr_number}_state"
+    fi
+
+    if [ -n "$head_branch_name" ]; then
+        echo "$head_branch_name" >> "$mock_state_dir/pr_${pr_number}_state"
     fi
 }
 
